@@ -1,6 +1,10 @@
 """
 로그인 후 메뉴 구조 진단 스크립트
 """
+import sys
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 import os, ssl, time, urllib3
 os.environ['WDM_SSL_VERIFY'] = '0'
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -19,7 +23,7 @@ import requests
 LOGIN_URL = "https://esdr.skax-sv-ai.com/login"
 LOGIN_ID  = "kukil.kang"
 LOGIN_PW  = "#Skcc03477"
-SAVE_DIR  = r"D:\Downloads\popup_inspect"
+SAVE_DIR  = r"C:\Users\03477\Downloads\popup_inspect"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 class NoSSLClient(WDMHttpClient):

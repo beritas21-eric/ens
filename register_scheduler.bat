@@ -8,7 +8,7 @@ echo ============================================
 echo.
 
 powershell -ExecutionPolicy Bypass -Command ^
-"$action = New-ScheduledTaskAction -Execute 'D:\Downloads\run_auto_refresh.bat'; ^
+"$action = New-ScheduledTaskAction -Execute 'C:\Users\03477\Downloads\ens\run_auto_refresh.bat'; ^
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Thursday,Friday -At '08:00'; ^
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 12) -StartWhenAvailable -RunOnlyIfNetworkAvailable; ^
 Register-ScheduledTask -TaskName 'AutoRefresh_EdgeMonitor' -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest -Force"

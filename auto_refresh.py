@@ -3,6 +3,10 @@ import re
 import ssl
 import sys
 import time
+
+# Windows 콘솔 UTF-8 출력 설정 (cp949 인코딩 오류 방지)
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 import datetime
 import urllib3
 import ctypes
@@ -433,7 +437,7 @@ def is_logged_in(driver):
 # Device 변경 감지
 # ──────────────────────────────────────────────
 
-ALERT_SAVE_DIR = r"D:\Downloads\device_alerts"
+ALERT_SAVE_DIR = r"C:\Users\03477\Downloads\device_alerts"
 os.makedirs(ALERT_SAVE_DIR, exist_ok=True)
 
 
