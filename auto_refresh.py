@@ -45,6 +45,7 @@ TARGET_URL         = "https://esdr.skax-sv-ai.com/device-management/monitoring-e
 LOGIN_ID           = "kukil.kang"
 LOGIN_PW           = "#Skcc03477"
 START_HOUR         = 8    # 오전 8시
+START_MINUTE       = 30   # 오전 8시 30분
 END_HOUR           = 17   # 오후 5시 자동 종료
 KEEPALIVE_INTERVAL = 30   # 초
 
@@ -164,12 +165,14 @@ def _ts():
 
 def is_active_time():
     now = datetime.datetime.now()
-    return START_HOUR <= now.hour < END_HOUR
+    start = now.replace(hour=START_HOUR, minute=START_MINUTE, second=0, microsecond=0)
+    end   = now.replace(hour=END_HOUR,   minute=0,            second=0, microsecond=0)
+    return start <= now < end
 
 
 def seconds_until_start():
     now = datetime.datetime.now()
-    start = now.replace(hour=START_HOUR, minute=0, second=0, microsecond=0)
+    start = now.replace(hour=START_HOUR, minute=START_MINUTE, second=0, microsecond=0)
     if now >= start:
         start += datetime.timedelta(days=1)
     return (start - now).total_seconds()
@@ -862,7 +865,7 @@ def keep_session_alive(driver, device_state):
 
 def main():
     print(f"세션 유지 시작: {TARGET_URL}")
-    print(f"운영 시간: {START_HOUR:02d}:00 ~ {END_HOUR:02d}:00, 유지 간격: {KEEPALIVE_INTERVAL}초")
+    print(f"운영 시간: {START_HOUR:02d}:{START_MINUTE:02d} ~ {END_HOUR:02d}:00, 유지 간격: {KEEPALIVE_INTERVAL}초")
 
     # 화면보호기 / 절전 모드 비활성화
     prevent_screensaver()
