@@ -2,12 +2,12 @@
 :: ============================================================
 ::  RabbitMQ Monitor - Task Scheduler Registration
 ::  Run this file as Administrator (right-click -> Run as admin)
-::  Schedule: Mon-Fri at 08:00
+::  Schedule: Tue-Wed at 08:30
 :: ============================================================
 setlocal EnableDelayedExpansion
 
 set TASK_NAME=RabbitMQ-Monitor-AutoStart
-set START_TIME=08:00
+set START_TIME=08:30
 set BAT_FILE=%~dp0start-rabbitmq-monitor.bat
 schtasks /delete /tn "RabbitMQ-Monitor-AutoStart" /f > nul 2>&1
 echo.
@@ -50,14 +50,14 @@ echo  [2/2] Registering scheduled task...
 echo.
 echo        Name     : %TASK_NAME%
 echo        Command  : %BAT_FILE%
-echo        Schedule : Mon-Fri at %START_TIME%
+echo        Schedule : Tue-Wed at %START_TIME%
 echo.
 
 schtasks /create ^
     /tn "%TASK_NAME%" ^
     /tr "cmd.exe /c \"%BAT_FILE%\"" ^
     /sc WEEKLY ^
-    /d MON,TUE,WED,THU,FRI ^
+    /d TUE,WED ^
     /st %START_TIME% ^
     /f
 
@@ -69,7 +69,7 @@ if %REG_RESULT% equ 0 (
     echo   SUCCESS - Task registered!
     echo  ====================================================
     echo.
-    echo   Schedule : Mon-Fri at %START_TIME%
+    echo   Schedule : Tue-Wed at %START_TIME%
     echo   Task name: %TASK_NAME%
     echo.
     echo   [How to verify]
