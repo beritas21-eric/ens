@@ -1,0 +1,16 @@
+# 개인 파일 / 기타 파일 제외
+*
+
+# 프로젝트 파일만 포함
+!.gitignore
+!auto_refresh.py
+!run_auto_refresh.bat
+!register_scheduler.bat
+!inspect_menu.py
+!inspect_popup.py
+
+# 생성된 폴더 제외
+device_alerts/
+popup_inspect/
+__pycache__/
+*.pyc
