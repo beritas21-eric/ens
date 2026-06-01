@@ -1,0 +1,2099 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RabbitMQ Queue Monitor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3350;
+      --text: #e2e8f0;
+      --text-muted: #8892b0;
+      --primary: #7c3aed;
+      --primary-light: #9d5cf6;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --info: #3b82f6;
+      --dlq: #ff6b6b;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      padding: 0;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    header .subtitle { font-size: 12px; color: var(--text-muted); }
+    .header-right {
+      margin-left: auto;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .connection-badge {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid;
+      transition: all 0.3s;
+    }
+    .connection-badge.disconnected { border-color: var(--border); color: var(--text-muted); }
+    .connection-badge.connecting   { border-color: var(--warning); color: var(--warning); }
+    .connection-badge.connected    { border-color: var(--success); color: var(--success); }
+    .connection-badge.error        { border-color: var(--danger);  color: var(--danger); }
+    .pulse {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .pulse.animate {
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.8); }
+    }
+    .countdown-ring {
+      width: 32px; height: 32px;
+      position: relative;
+      flex-shrink: 0;
+    }
+    .countdown-ring svg { transform: rotate(-90deg); }
+    .countdown-ring circle {
+      fill: none;
+      stroke: var(--primary);
+      stroke-width: 3;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 1s linear;
+    }
+    .countdown-ring .track { stroke: var(--border); }
+    #countdown-text {
+      position: absolute;
+      inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--primary-light);
+    }
+
+    /* ── Main layout ── */
+    main { padding: 24px; max-width: 1600px; margin: 0 auto; }
+
+    /* ── Connection Panel ── */
+    .connection-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 20px;
+    }
+    .connection-panel h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 16px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .connection-panel h2::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .conn-form {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr auto;
+      gap: 12px;
+      align-items: end;
+    }
+    @media (max-width: 768px) {
+      .conn-form { grid-template-columns: 1fr 1fr; }
+    }
+    .conn-proxy-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--border);
+    }
+    .conn-proxy-row .field { flex: 1; }
+    .optional-tag {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 600;
+      background: rgba(124,58,237,0.15);
+      color: var(--primary-light);
+      border: 1px solid rgba(124,58,237,0.3);
+      border-radius: 4px;
+      padding: 1px 5px;
+      margin-left: 5px;
+      vertical-align: middle;
+      letter-spacing: 0.3px;
+    }
+    .proxy-active-indicator {
+      display: none;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--success);
+      font-weight: 600;
+      padding: 4px 10px;
+      background: rgba(16,185,129,0.1);
+      border: 1px solid rgba(16,185,129,0.3);
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .proxy-active-indicator.on { display: flex; }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+    .field input {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 9px 12px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+      width: 100%;
+    }
+    .field input:focus { border-color: var(--primary); }
+    .field input::placeholder { color: var(--text-muted); opacity: 0.6; }
+
+    .btn {
+      padding: 9px 20px;
+      border-radius: 8px;
+      border: none;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+    }
+    .btn-primary:hover { background: var(--primary-light); }
+    .btn-secondary {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: var(--border); }
+    .btn-danger {
+      background: rgba(239,68,68,0.15);
+      color: var(--danger);
+      border: 1px solid rgba(239,68,68,0.3);
+    }
+    .btn-danger:hover { background: rgba(239,68,68,0.25); }
+    .btn-group { display: flex; gap: 8px; }
+
+    /* ── Alert Banner ── */
+    #alert-container {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .alert-item {
+      background: rgba(255, 107, 107, 0.12);
+      border: 1px solid rgba(255, 107, 107, 0.4);
+      border-left: 4px solid var(--dlq);
+      border-radius: 8px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: slideIn 0.3s ease;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .alert-icon { font-size: 18px; flex-shrink: 0; }
+    .alert-content { flex: 1; }
+    .alert-title { font-weight: 700; color: var(--dlq); font-size: 13px; }
+    .alert-msg   { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .alert-close {
+      background: none; border: none; color: var(--text-muted);
+      cursor: pointer; font-size: 18px; padding: 0 4px;
+      flex-shrink: 0;
+    }
+    .alert-close:hover { color: var(--text); }
+
+    /* ── Stats Summary ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; }
+    .stat-value { font-size: 28px; font-weight: 700; line-height: 1; }
+    .stat-value.green  { color: var(--success); }
+    .stat-value.yellow { color: var(--warning); }
+    .stat-value.red    { color: var(--danger); }
+    .stat-value.purple { color: var(--primary-light); }
+    .stat-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+    /* ── Filter Bar ── */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .filter-bar input {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 7px 12px;
+      font-size: 13px;
+      outline: none;
+      width: 220px;
+      transition: border-color 0.2s;
+    }
+    .filter-bar input:focus { border-color: var(--primary); }
+    .filter-bar input::placeholder { color: var(--text-muted); opacity: 0.6; }
+    .filter-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip {
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s;
+      background: var(--surface);
+    }
+    .chip:hover   { border-color: var(--primary); color: var(--primary-light); }
+    .chip.active  { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .chip.dlq-chip.active { background: var(--dlq); border-color: var(--dlq); }
+
+    /* ── Table ── */
+    .table-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .table-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .table-header h3 { font-size: 14px; font-weight: 600; }
+    .table-header .queue-count { font-size: 12px; color: var(--text-muted); }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th {
+      background: var(--surface2);
+      padding: 10px 14px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+    thead th:hover { color: var(--text); }
+    thead th .sort-icon { margin-left: 4px; opacity: 0.5; }
+    thead th.sorted .sort-icon { opacity: 1; color: var(--primary-light); }
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s;
+    }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: rgba(255,255,255,0.03); }
+    tbody tr.dlq-row { background: rgba(255, 107, 107, 0.05); }
+    tbody tr.dlq-row:hover { background: rgba(255, 107, 107, 0.10); }
+    td { padding: 11px 14px; vertical-align: middle; }
+
+    .queue-name {
+      font-weight: 600;
+      font-size: 13px;
+      display: flex; align-items: center; gap: 7px;
+    }
+    .dlq-tag {
+      font-size: 10px;
+      font-weight: 700;
+      background: rgba(255,107,107,0.2);
+      color: var(--dlq);
+      border: 1px solid rgba(255,107,107,0.4);
+      padding: 2px 6px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+    }
+
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .num.ready    { color: var(--info); font-weight: 600; }
+    .num.unacked  { color: var(--warning); font-weight: 600; }
+    .num.total    { color: var(--text); }
+    .num.danger-num { color: var(--danger); font-weight: 700; }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 8px; border-radius: 5px;
+      font-size: 11px; font-weight: 600;
+    }
+    .badge-running  { background: rgba(16,185,129,0.15); color: var(--success); }
+    .badge-idle     { background: rgba(139,148,178,0.15); color: var(--text-muted); }
+    .badge-down     { background: rgba(239,68,68,0.15); color: var(--danger); }
+    .badge-flow     { background: rgba(245,158,11,0.15); color: var(--warning); }
+
+    .rate {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .rate.positive { color: var(--success); }
+    .rate.negative { color: var(--danger); }
+
+    .consumer-count {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 26px; height: 20px;
+      background: var(--surface2);
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .consumer-count.has-consumers { color: var(--success); background: rgba(16,185,129,0.12); }
+
+    /* ── Empty / Loading ── */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+    }
+    .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
+    .empty-state p { font-size: 14px; }
+    .empty-state small { font-size: 12px; opacity: 0.7; }
+
+    .loading-row td { text-align: center; padding: 40px; color: var(--text-muted); }
+    .spinner {
+      display: inline-block;
+      width: 20px; height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Toast Notification ── */
+    #toast {
+      position: fixed;
+      bottom: 24px; right: 24px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 18px;
+      font-size: 13px;
+      max-width: 340px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      z-index: 9999;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s;
+      pointer-events: none;
+    }
+    #toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    #toast.toast-success { border-left: 4px solid var(--success); }
+    #toast.toast-error   { border-left: 4px solid var(--danger); }
+    #toast.toast-info    { border-left: 4px solid var(--info); }
+
+    /* ── DLQ Alert Modal ── */
+    #dlq-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 9000;
+      align-items: center;
+      justify-content: center;
+    }
+    #dlq-modal.show { display: flex; }
+    .modal-box {
+      background: var(--surface);
+      border: 1px solid rgba(255,107,107,0.4);
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 480px;
+      width: 90%;
+      text-align: center;
+      animation: modalIn 0.3s ease;
+    }
+    @keyframes modalIn {
+      from { opacity: 0; transform: scale(0.9); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    .modal-icon { font-size: 56px; margin-bottom: 16px; }
+    .modal-title { font-size: 22px; font-weight: 700; color: var(--dlq); margin-bottom: 8px; }
+    .modal-body  { font-size: 14px; color: var(--text-muted); line-height: 1.6; margin-bottom: 24px; }
+    .modal-body strong { color: var(--text); }
+    .modal-actions { display: flex; gap: 10px; justify-content: center; }
+
+    /* ── Error Modal ── */
+    #error-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      z-index: 9100;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    #error-modal.show { display: flex; }
+    .error-modal-box {
+      background: var(--surface);
+      border: 1px solid rgba(239,68,68,0.45);
+      border-radius: 16px;
+      padding: 28px 28px 24px;
+      max-width: 580px;
+      width: 100%;
+      animation: modalIn 0.25s ease;
+      overflow: hidden;
+    }
+    .err-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+    .err-icon-wrap {
+      width: 48px; height: 48px;
+      background: rgba(239,68,68,0.12);
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+    .err-title-block { flex: 1; }
+    .err-title {
+      font-size: 17px; font-weight: 700;
+      color: var(--danger);
+      margin-bottom: 3px;
+    }
+    .err-subtitle { font-size: 12px; color: var(--text-muted); }
+    .err-close-btn {
+      background: none; border: none;
+      color: var(--text-muted); cursor: pointer;
+      font-size: 20px; padding: 0 2px; line-height: 1;
+      flex-shrink: 0;
+    }
+    .err-close-btn:hover { color: var(--text); }
+
+    .err-section { margin-bottom: 14px; }
+    .err-section-label {
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.8px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .err-url-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #93c5fd;
+      word-break: break-all;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .err-url-box span { flex: 1; }
+
+    .err-status-row {
+      display: flex; gap: 8px; flex-wrap: wrap;
+      align-items: center;
+    }
+    .err-badge {
+      padding: 3px 10px; border-radius: 5px;
+      font-size: 12px; font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    .err-badge-type  { background: rgba(239,68,68,0.15); color: var(--danger); border: 1px solid rgba(239,68,68,0.3); }
+    .err-badge-code  { background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3); }
+    .err-badge-cors  { background: rgba(139,92,246,0.15); color: #a78bfa; border: 1px solid rgba(139,92,246,0.3); }
+    .err-badge-net   { background: rgba(59,130,246,0.15); color: #93c5fd; border: 1px solid rgba(59,130,246,0.3); }
+    .err-msg-text {
+      font-size: 13px; color: var(--text);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: monospace;
+      word-break: break-all;
+      line-height: 1.5;
+    }
+
+    .err-diagnosis {
+      background: rgba(245,158,11,0.07);
+      border: 1px solid rgba(245,158,11,0.25);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .err-diagnosis-title {
+      font-size: 12px; font-weight: 700;
+      color: var(--warning); margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .err-cause-list {
+      list-style: none; padding: 0; margin: 0;
+      display: flex; flex-direction: column; gap: 5px;
+    }
+    .err-cause-list li {
+      font-size: 12px; color: var(--text-muted);
+      padding-left: 16px; position: relative; line-height: 1.5;
+    }
+    .err-cause-list li::before {
+      content: '›';
+      position: absolute; left: 0;
+      color: var(--warning); font-weight: 700;
+    }
+    .err-cause-list li strong { color: var(--text); }
+    .err-cause-list li code {
+      background: rgba(0,0,0,0.3);
+      padding: 1px 5px; border-radius: 3px;
+      font-family: monospace; font-size: 11px;
+    }
+
+    .err-detail-toggle {
+      background: none; border: none;
+      color: var(--text-muted); cursor: pointer;
+      font-size: 12px; padding: 4px 0;
+      display: flex; align-items: center; gap: 5px;
+      width: 100%;
+      text-align: left;
+    }
+    .err-detail-toggle:hover { color: var(--text); }
+    .err-detail-toggle .toggle-arrow { transition: transform 0.2s; font-size: 10px; }
+    .err-detail-toggle.open .toggle-arrow { transform: rotate(90deg); }
+    .err-detail-body {
+      display: none;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-top: 6px;
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 120px;
+      overflow-y: auto;
+      line-height: 1.5;
+    }
+    .err-detail-body.open { display: block; }
+
+    .err-actions {
+      display: flex; gap: 8px; justify-content: flex-end;
+      margin-top: 20px; padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    /* ── CORS note ── */
+    .cors-note {
+      background: rgba(59,130,246,0.1);
+      border: 1px solid rgba(59,130,246,0.3);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #93c5fd;
+      margin-top: 12px;
+      line-height: 1.6;
+    }
+    .cors-note code {
+      background: rgba(0,0,0,0.3);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+
+    /* ── 마지막 활동 셀 ── */
+    .activity-live {
+      color: var(--success);
+      font-weight: 600;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .activity-time {
+      color: var(--text-muted);
+      font-size: 12px;
+      white-space: nowrap;
+      cursor: default; /* hover 시 title(절대시간) 표시 */
+    }
+    .activity-past {
+      color: var(--text-muted);
+      font-size: 11px;
+      opacity: 0.7;
+      white-space: nowrap;
+    }
+    .activity-none {
+      color: var(--border);
+      font-size: 13px;
+    }
+
+    /* ── 알림 컨트롤 버튼 ── */
+    .notif-controls { display: flex; gap: 5px; }
+    .notif-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      width: 34px; height: 34px;
+      font-size: 17px;
+      transition: all 0.2s;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .notif-btn:hover  { background: var(--border); }
+    .notif-btn.active { background: rgba(124,58,237,0.15); border-color: var(--primary-light); }
+    .notif-btn.off    { opacity: 0.38; filter: grayscale(1); }
+
+    /* ── Ready 메시지 알림 모달 ── */
+    #ready-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 8900;
+      align-items: center;
+      justify-content: center;
+    }
+    #ready-modal.show { display: flex; }
+    .ready-modal-box  { border-color: rgba(245,158,11,0.45) !important; }
+    .ready-modal-title { color: var(--warning) !important; }
+
+    /* 5초 카운트다운 바 */
+    .ready-timer-wrap {
+      width: 100%;
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .ready-timer-bar {
+      height: 100%;
+      width: 100%;
+      background: var(--warning);
+      border-radius: 2px;
+    }
+
+    /* last updated */
+    #last-updated {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* ── Publish Rate 경고 모달 ── */
+    #low-publish-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 8800;
+      align-items: center;
+      justify-content: center;
+    }
+    #low-publish-modal.show { display: flex; }
+    .low-pub-modal-box  { border-color: rgba(245,158,11,0.5) !important; }
+    .low-pub-modal-title { color: var(--warning) !important; }
+
+    .low-pub-timer-wrap {
+      width: 100%;
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .low-pub-timer-bar {
+      height: 100%;
+      width: 100%;
+      background: var(--warning);
+      border-radius: 2px;
+    }
+
+    /* 테이블 내 Publish/s 낮음 강조 */
+    .rate.low-warning { color: var(--warning); font-weight: 700; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">🐇</div>
+  <div>
+    <h1>RabbitMQ Monitor</h1>
+    <div class="subtitle">Queue 실시간 모니터링</div>
+  </div>
+  <div class="header-right">
+    <span id="last-updated"></span>
+    <!-- 알림 컨트롤 -->
+    <div class="notif-controls">
+      <button id="sound-btn" class="notif-btn active" onclick="toggleSound()" title="알림음 켜기/끄기">🔊</button>
+      <button id="notif-btn" class="notif-btn off"    onclick="toggleBrowserNotif()" title="브라우저 OS 알림 — 스크린세이버 중에도 표시됩니다">🔔</button>
+    </div>
+    <div class="countdown-ring" id="countdown-ring" title="다음 갱신까지">
+      <svg width="32" height="32" viewBox="0 0 32 32">
+        <circle class="track" cx="16" cy="16" r="13" />
+        <circle id="progress-circle" cx="16" cy="16" r="13"
+          stroke-dasharray="81.68" stroke-dashoffset="81.68" />
+      </svg>
+      <div id="countdown-text">5</div>
+    </div>
+    <div class="connection-badge disconnected" id="conn-badge">
+      <div class="pulse" id="pulse-dot"></div>
+      <span id="conn-text">연결 안됨</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── Main ── -->
+<main>
+
+  <!-- Connection Panel -->
+  <div class="connection-panel" id="conn-panel">
+    <h2>연결 설정</h2>
+    <div class="conn-form">
+      <div class="field">
+        <label>RabbitMQ URL</label>
+        <input type="text" id="rmq-url" placeholder="http://localhost:15672" value="https://esdr.skax-sv-ai.com:15672" />
+      </div>
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="rmq-user" placeholder="guest" value="smartvision" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="rmq-pass" placeholder="guest" value="sv2021" />
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="connect()">연결</button>
+        <button class="btn btn-secondary" onclick="togglePanel()">접기</button>
+      </div>
+    </div>
+    <!-- Proxy row -->
+    <div class="conn-proxy-row">
+      <div class="field">
+        <label>프록시 URL <span class="optional-tag">선택</span>
+          <span style="font-weight:400;margin-left:4px">— CORS 오류 시 로컬 프록시 주소 입력</span>
+        </label>
+        <input type="text" id="rmq-proxy" placeholder="비워두면 직접 연결 · CORS 오류 시: http://localhost:15673"
+          oninput="updateProxyIndicator()" />
+      </div>
+      <div class="proxy-active-indicator" id="proxy-indicator">🔀 프록시 모드</div>
+      <button class="btn btn-secondary" onclick="downloadProxyScript()" title="Python 3 CORS 프록시 스크립트 다운로드 (추가 설치 불필요)">
+        🐍 프록시 스크립트 생성
+      </button>
+    </div>
+
+    <div class="cors-note">
+      ⚠️ <strong>CORS 오류 발생 시 해결 방법 (택 1):</strong><br>
+      ① <strong>[추천]</strong> 아래 버튼으로 Python 프록시 스크립트를 다운로드 → <code>python rabbitmq-proxy.py</code> 실행 → 프록시 URL에 <code>http://localhost:15673</code> 입력<br>
+      ② <code>rabbitmq.conf</code>에 <code>management.cors.allow_origins.1 = *</code> 추가 후 RabbitMQ 재시작<br>
+      ③ Chrome 확장 프로그램 "CORS Unblock" 설치 후 활성화
+    </div>
+  </div>
+
+  <!-- Alert Container -->
+  <div id="alert-container"></div>
+
+  <!-- Stats Summary -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">전체 Queue</div>
+      <div class="stat-value purple" id="stat-total">—</div>
+      <div class="stat-sub">개 큐</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">대기 메시지</div>
+      <div class="stat-value green" id="stat-ready">—</div>
+      <div class="stat-sub">Ready</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">처리 중</div>
+      <div class="stat-value yellow" id="stat-unacked">—</div>
+      <div class="stat-sub">Unacknowledged</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Dead Letter</div>
+      <div class="stat-value red" id="stat-dlq">—</div>
+      <div class="stat-sub">DLQ 메시지</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">전체 소비자</div>
+      <div class="stat-value purple" id="stat-consumers">—</div>
+      <div class="stat-sub">Consumers</div>
+    </div>
+  </div>
+
+  <!-- Filter Bar -->
+  <div class="filter-bar">
+    <input type="text" id="search-input" placeholder="Queue 이름 검색..." oninput="renderTable()" />
+    <div class="filter-chips">
+      <div class="chip active" data-filter="all" onclick="setFilter('all', this)">전체</div>
+      <div class="chip" data-filter="active" onclick="setFilter('active', this)">메시지 있음</div>
+      <div class="chip dlq-chip" data-filter="dlq" onclick="setFilter('dlq', this)">⚠ DLQ</div>
+      <div class="chip" data-filter="no-consumer" onclick="setFilter('no-consumer', this)">소비자 없음</div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrapper">
+    <div class="table-header">
+      <h3>Queue 목록</h3>
+      <span class="queue-count" id="queue-count-label">—</span>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th onclick="sortBy('name')">Queue 이름 <span class="sort-icon">↕</span></th>
+            <th onclick="sortBy('vhost')">Vhost <span class="sort-icon">↕</span></th>
+            <th onclick="sortBy('state')">상태 <span class="sort-icon">↕</span></th>
+            <th onclick="sortBy('last_activity')">마지막 활동 <span class="sort-icon">↕</span></th>
+            <th class="num" onclick="sortBy('messages_ready')">Ready <span class="sort-icon">↕</span></th>
+            <th class="num" onclick="sortBy('messages_unacknowledged')">Unacked <span class="sort-icon">↕</span></th>
+            <th class="num" onclick="sortBy('messages')">Total <span class="sort-icon">↕</span></th>
+            <th class="num" onclick="sortBy('consumers')">Consumers <span class="sort-icon">↕</span></th>
+            <th class="num" onclick="sortBy('publish_rate')">Publish/s <span class="sort-icon">↕</span></th>
+            <th class="num" onclick="sortBy('deliver_rate')">Deliver/s <span class="sort-icon">↕</span></th>
+            <th class="num" onclick="sortBy('memory')">Memory <span class="sort-icon">↕</span></th>
+          </tr>
+        </thead>
+        <tbody id="queue-tbody">
+          <tr class="loading-row" id="initial-row">
+            <td colspan="11">
+              <div class="empty-state">
+                <div class="icon">🔌</div>
+                <p>RabbitMQ에 연결해 주세요</p>
+                <small>위의 연결 설정에서 URL, 계정 정보를 입력하고 [연결] 버튼을 누르세요</small>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<!-- ── Toast ── -->
+<div id="toast"></div>
+
+<!-- ── Error Detail Modal ── -->
+<div id="error-modal">
+  <div class="error-modal-box">
+    <div class="err-header">
+      <div class="err-icon-wrap">⚠️</div>
+      <div class="err-title-block">
+        <div class="err-title" id="err-title">연결 오류</div>
+        <div class="err-subtitle" id="err-subtitle">RabbitMQ 서버에 연결할 수 없습니다</div>
+      </div>
+      <button class="err-close-btn" onclick="closeErrorModal()">✕</button>
+    </div>
+
+    <!-- 요청 URL -->
+    <div class="err-section">
+      <div class="err-section-label">요청 URL</div>
+      <div class="err-url-box"><span id="err-url">—</span></div>
+    </div>
+
+    <!-- 오류 유형 & 상태 코드 -->
+    <div class="err-section">
+      <div class="err-section-label">오류 정보</div>
+      <div class="err-status-row" id="err-badges"></div>
+      <div class="err-msg-text" id="err-msg" style="margin-top:8px">—</div>
+    </div>
+
+    <!-- 진단 & 해결 방법 -->
+    <div class="err-section">
+      <div class="err-section-label">원인 및 해결 방법</div>
+      <div class="err-diagnosis">
+        <div class="err-diagnosis-title">💡 가능한 원인</div>
+        <ul class="err-cause-list" id="err-causes"></ul>
+      </div>
+    </div>
+
+    <!-- 기술적 세부 정보 (접기/펼치기) -->
+    <div class="err-section" id="err-technical-section" style="margin-bottom:0">
+      <button class="err-detail-toggle" id="err-toggle-btn" onclick="toggleErrDetail()">
+        <span class="toggle-arrow">▶</span> 기술적 세부 정보
+      </button>
+      <div class="err-detail-body" id="err-detail-body"></div>
+    </div>
+
+    <div class="err-actions">
+      <button class="btn btn-secondary" onclick="closeErrorModal()">닫기</button>
+      <button class="btn btn-primary" onclick="closeErrorModal(); connect()">🔄 재시도</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Ready 메시지 알림 모달 ── -->
+<div id="ready-modal">
+  <div class="modal-box ready-modal-box">
+    <div class="modal-icon">⚠️</div>
+    <div class="modal-title ready-modal-title">대기 메시지 발생!</div>
+    <div class="modal-body" id="ready-modal-body"></div>
+    <div class="ready-timer-wrap">
+      <div class="ready-timer-bar" id="ready-timer-bar"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeReadyModal()">확인</button>
+      <button class="btn btn-secondary" onclick="muteReadyAlerts()">이 세션 알림 끄기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Low Publish Rate 경고 모달 ── -->
+<div id="low-publish-modal">
+  <div class="modal-box low-pub-modal-box">
+    <div class="modal-icon">📉</div>
+    <div class="modal-title low-pub-modal-title">Publish 속도 저하 감지!</div>
+    <div class="modal-body" id="low-publish-modal-body"></div>
+    <div class="low-pub-timer-wrap">
+      <div class="low-pub-timer-bar" id="low-pub-timer-bar"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeLowPublishModal()">확인</button>
+      <button class="btn btn-secondary" onclick="muteLowPublishAlerts()">이 세션 알림 끄기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── DLQ Modal ── -->
+<div id="dlq-modal">
+  <div class="modal-box">
+    <div class="modal-icon">🚨</div>
+    <div class="modal-title">Dead Letter Queue 감지!</div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeDLQModal()">확인 (모달 닫기)</button>
+      <button class="btn btn-danger" onclick="muteAlerts()">이 세션 알림 끄기</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let queues = [];
+  let filterMode = 'all';
+  let sortKey = 'name';
+  let sortAsc = true;
+  let intervalId = null;
+  let countdownId = null;
+  let connected = false;
+  let alertMuted = false;
+  let shownDLQAlerts = new Set();
+  let countdownSec = 5;
+  const INTERVAL = 5000;
+  const CIRCUMFERENCE = 2 * Math.PI * 13; // r=13 → 81.68
+
+  // ── 알림 상태 ─────────────────────────────────────────────────────────────
+  const prevReadyMap       = new Map(); // queueKey → 이전 messages_ready 값
+  const prevPublishRateMap = new Map(); // queueKey → 이전 publish/s 값
+  let soundEnabled         = true;      // 알림음
+  let notifEnabled         = false;     // OS 브라우저 알림
+  let readyAlertMuted      = false;     // 이 세션 Ready 알림 음소거
+  let lowPublishMuted      = false;     // 이 세션 Publish 속도 저하 알림 음소거
+  let readyModalTimer      = null;      // 5초 자동 닫기 타이머
+  let lowPublishModalTimer = null;
+  let audioCtx             = null;      // Web Audio API context (lazy)
+
+  const LOW_PUBLISH_THRESHOLD = 2.0;   // 이 값 이하로 떨어지면 경고
+
+  // ── 마지막 활동 시간 추적 ──────────────────────────────────────────────────
+  const lastActivityMap = new Map(); // "vhost||name" → Date
+
+  function queueKey(q) { return `${q.vhost}||${q.name}`; }
+
+  function updateActivityTracking(queueList) {
+    const now = new Date();
+    queueList.forEach(q => {
+      const key     = queueKey(q);
+      const pubRate = getRate(q, 'publish');
+      const delRate = getRate(q, 'deliver_get');
+      const isLive  = (q.messages || 0) > 0 || pubRate > 0 || delRate > 0;
+
+      if (isLive) {
+        // 현재 활성 상태 → 지금으로 갱신
+        lastActivityMap.set(key, now);
+      } else if (!lastActivityMap.has(key)) {
+        // 첫 폴링에서 idle 상태 → idle_since 활용
+        if (q.idle_since) {
+          try {
+            // "2024-11-14 10:30:00" → ISO 8601 변환 (UTC 기준)
+            lastActivityMap.set(key, new Date(q.idle_since.replace(' ', 'T') + 'Z'));
+          } catch { /* ignore */ }
+        }
+      }
+    });
+  }
+
+  function formatLastActivity(q) {
+    const key     = queueKey(q);
+    const pubRate = getRate(q, 'publish');
+    const delRate = getRate(q, 'deliver_get');
+    const isLive  = (q.messages || 0) > 0 || pubRate > 0 || delRate > 0;
+
+    if (isLive) {
+      return '<span class="activity-live">● 처리 중</span>';
+    }
+
+    const t = lastActivityMap.get(key);
+    if (t) {
+      const diff = Date.now() - t.getTime();
+      return `<span class="activity-time" title="${t.toLocaleString('ko-KR')}">${relativeTime(diff)}</span>`;
+    }
+
+    // idle_since 없이 누적 통계가 있으면 "과거 활동 있음"
+    const ms = q.message_stats;
+    if (ms && ((ms.publish || 0) > 0 || (ms.deliver || 0) > 0)) {
+      return '<span class="activity-past">과거 활동 있음</span>';
+    }
+
+    return '<span class="activity-none">—</span>';
+  }
+
+  function relativeTime(diffMs) {
+    const s = Math.floor(diffMs / 1000);
+    if (s <  5)    return '방금';
+    if (s < 60)    return `${s}초 전`;
+    if (s < 3600)  return `${Math.floor(s / 60)}분 전`;
+    if (s < 86400) return `${Math.floor(s / 3600)}시간 전`;
+    return `${Math.floor(s / 86400)}일 전`;
+  }
+
+  // ── Ready 메시지 변화 감지 ────────────────────────────────────────────────
+  // triggerAlerts=false → 첫 폴링 초기화 (기존 메시지 무시)
+  // triggerAlerts=true  → 0→N 전환 시 알림 발생
+  function detectReadyAlerts(queueList, triggerAlerts) {
+    const alerts = [];
+    queueList.forEach(q => {
+      const key  = queueKey(q);
+      const curr = q.messages_ready || 0;
+      // 첫 폴링: has() false → prev = curr (기존 메시지는 알림 없이 초기화)
+      const prev = prevReadyMap.has(key) ? prevReadyMap.get(key) : curr;
+      if (triggerAlerts && prev === 0 && curr > 0 && !isDLQ(q.name)) {
+        alerts.push({ queue: q, count: curr });
+      }
+      prevReadyMap.set(key, curr);
+    });
+    if (triggerAlerts && alerts.length > 0 && !readyAlertMuted) {
+      handleReadyAlerts(alerts);
+    }
+  }
+
+  // ── Publish 속도 저하 감지 ───────────────────────────────────────────────
+  function detectLowPublishRateAlerts(queueList, triggerAlerts) {
+    const alerts = [];
+    queueList.forEach(q => {
+      const key  = queueKey(q);
+      const curr = getRate(q, 'publish');
+      const prev = prevPublishRateMap.has(key) ? prevPublishRateMap.get(key) : curr;
+      // 이전 폴링에서 임계값 초과 → 현재 임계값 이하로 하락 시 경고
+      const isActive = (q.consumers || 0) > 0 || (q.messages || 0) > 0;
+      if (triggerAlerts && isActive && prev > LOW_PUBLISH_THRESHOLD && curr <= LOW_PUBLISH_THRESHOLD) {
+        alerts.push({ queue: q, prev: prev, curr: curr });
+      }
+      prevPublishRateMap.set(key, curr);
+    });
+    if (triggerAlerts && alerts.length > 0 && !lowPublishMuted) {
+      handleLowPublishRateAlerts(alerts);
+    }
+  }
+
+  function handleLowPublishRateAlerts(alerts) {
+    playAlertSound('warning');
+
+    const names = alerts.map(a => a.queue.name).join(', ');
+    sendOSNotif(
+      `📉 Publish 속도 저하 감지 (${alerts.length}개 큐)`,
+      `Queue: ${names}\nPublish/s 가 ${LOW_PUBLISH_THRESHOLD} 이하로 떨어졌습니다.`,
+      'rabbitmq-low-publish'
+    );
+
+    document.getElementById('low-publish-modal-body').innerHTML =
+      alerts.map(a =>
+        `<p>큐 <strong>${escapeHtml(a.queue.name)}</strong>
+         <span style="color:var(--text-muted);font-size:12px">(${escapeHtml(a.queue.vhost)})</span>의<br>
+         Publish/s 가 <strong style="color:var(--warning)">${a.curr.toFixed(1)}</strong>
+         <span style="color:var(--text-muted);font-size:12px">(이전: ${a.prev.toFixed(1)})</span>으로 저하됐습니다.</p>`
+      ).join('<hr style="border-color:var(--border);margin:10px 0">');
+
+    openLowPublishModal();
+  }
+
+  function openLowPublishModal() {
+    document.getElementById('low-publish-modal').classList.add('show');
+    const bar = document.getElementById('low-pub-timer-bar');
+    bar.style.transition = 'none';
+    bar.style.width = '100%';
+    bar.offsetHeight;
+    bar.style.transition = 'width 5s linear';
+    bar.style.width = '0%';
+    clearTimeout(lowPublishModalTimer);
+    lowPublishModalTimer = setTimeout(closeLowPublishModal, 5000);
+  }
+
+  function closeLowPublishModal() {
+    clearTimeout(lowPublishModalTimer);
+    document.getElementById('low-publish-modal').classList.remove('show');
+  }
+
+  function muteLowPublishAlerts() {
+    lowPublishMuted = true;
+    closeLowPublishModal();
+    showToast('이 세션에서 Publish 속도 저하 알림을 끕니다.', 'info');
+  }
+
+  // ── Ready 알림 — 팝업 + 소리 + OS 알림 ───────────────────────────────────
+  function handleReadyAlerts(alerts) {
+    playAlertSound('warning');
+
+    // OS 알림 (스크린세이버·화면 잠금 중에도 표시됨)
+    const names = alerts.map(a => a.queue.name).join(', ');
+    const total = alerts.reduce((s, a) => s + a.count, 0);
+    sendOSNotif(
+      `⚠️ 대기 메시지 발생 (${total}개)`,
+      `Queue: ${names}\n처리를 기다리는 메시지가 있습니다.`,
+      'rabbitmq-ready'
+    );
+
+    // 팝업 모달 내용 구성
+    document.getElementById('ready-modal-body').innerHTML =
+      alerts.map(a =>
+        `<p>큐 <strong>${escapeHtml(a.queue.name)}</strong>
+         <span style="color:var(--text-muted);font-size:12px">(${escapeHtml(a.queue.vhost)})</span>에<br>
+         메시지 <strong style="color:var(--warning)">${a.count.toLocaleString()}개</strong>가 대기 중입니다.</p>`
+      ).join('<hr style="border-color:var(--border);margin:10px 0">');
+
+    openReadyModal();
+  }
+
+  function openReadyModal() {
+    document.getElementById('ready-modal').classList.add('show');
+    // 5초 카운트다운 바
+    const bar = document.getElementById('ready-timer-bar');
+    bar.style.transition = 'none';
+    bar.style.width = '100%';
+    bar.offsetHeight; // force reflow
+    bar.style.transition = 'width 5s linear';
+    bar.style.width = '0%';
+    clearTimeout(readyModalTimer);
+    readyModalTimer = setTimeout(closeReadyModal, 5000);
+  }
+
+  function closeReadyModal() {
+    clearTimeout(readyModalTimer);
+    document.getElementById('ready-modal').classList.remove('show');
+  }
+
+  function muteReadyAlerts() {
+    readyAlertMuted = true;
+    closeReadyModal();
+    showToast('이 세션에서 대기 메시지 알림을 끕니다.', 'info');
+  }
+
+  // ── 탭 제목 — 메시지 대기 현황 반영 ─────────────────────────────────────
+  function updateTabTitle() {
+    if (!connected) { document.title = 'RabbitMQ Monitor'; return; }
+    const ready  = queues.reduce((s, q) => s + (!isDLQ(q.name) ? (q.messages_ready || 0) : 0), 0);
+    const dlqOn  = queues.some(q => isDLQ(q.name) && (q.messages || 0) > 0);
+    if (dlqOn)       document.title = `🚨 DLQ 감지! — RabbitMQ Monitor`;
+    else if (ready)  document.title = `⚠️ [${ready.toLocaleString()}] — RabbitMQ Monitor`;
+    else             document.title = '✅ RabbitMQ Monitor';
+  }
+
+  // ── Web Audio 알림음 ──────────────────────────────────────────────────────
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    return audioCtx;
+  }
+
+  function playAlertSound(type) {
+    if (!soundEnabled) return;
+    try {
+      const ctx = getAudioCtx();
+      const now = ctx.currentTime;
+      const tone = (freq, t, dur, vol = 0.22, shape = 'sine') => {
+        const osc = ctx.createOscillator(), gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.type = shape; osc.frequency.value = freq;
+        gain.gain.setValueAtTime(vol, now + t);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + t + dur);
+        osc.start(now + t); osc.stop(now + t + dur + 0.01);
+      };
+      if (type === 'critical') {
+        // DLQ — 긴박한 3연속 사각파
+        tone(880, 0.00, 0.13, 0.28, 'square');
+        tone(880, 0.17, 0.13, 0.28, 'square');
+        tone(880, 0.34, 0.20, 0.28, 'square');
+      } else {
+        // Ready — 부드러운 상승 2음 (C5 → E5)
+        tone(523, 0.00, 0.18, 0.22, 'sine');
+        tone(659, 0.20, 0.22, 0.18, 'sine');
+      }
+    } catch (e) { console.warn('[Monitor] 알림음 실패:', e.message); }
+  }
+
+  // ── 브라우저 OS 알림 (스크린세이버 중에도 작동) ───────────────────────────
+  async function requestNotifPermission() {
+    if (!('Notification' in window)) {
+      showToast('이 브라우저는 알림을 지원하지 않습니다.', 'error');
+      return false;
+    }
+    if (Notification.permission === 'granted') return true;
+    const perm = await Notification.requestPermission();
+    return perm === 'granted';
+  }
+
+  function sendOSNotif(title, body, tag) {
+    if (!notifEnabled || Notification?.permission !== 'granted') return;
+    try {
+      const n = new Notification(title, {
+        body, tag: tag || 'rmq-monitor', renotify: true,
+        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🐇</text></svg>',
+      });
+      n.onclick = () => { window.focus(); n.close(); };
+      setTimeout(() => n.close(), 10000);
+    } catch (e) { console.warn('[Monitor] OS 알림 실패:', e.message); }
+  }
+
+  // ── 알림 버튼 토글 ────────────────────────────────────────────────────────
+  function toggleSound() {
+    soundEnabled = !soundEnabled;
+    updateNotifBtns();
+    if (soundEnabled) playAlertSound('warning'); // 미리 듣기
+    showToast(soundEnabled ? '🔊 알림음 켜짐' : '🔇 알림음 꺼짐', 'info');
+  }
+
+  async function toggleBrowserNotif() {
+    if (!notifEnabled) {
+      const ok = await requestNotifPermission();
+      if (!ok) {
+        showToast('알림 권한이 거부됐습니다. 주소창 자물쇠 아이콘 → 알림 → 허용', 'error');
+        return;
+      }
+      notifEnabled = true;
+      showToast('🔔 OS 알림 켜짐 — 스크린세이버·최소화 중에도 표시됩니다.', 'success');
+    } else {
+      notifEnabled = false;
+      showToast('🔕 OS 알림 꺼짐', 'info');
+    }
+    updateNotifBtns();
+  }
+
+  function updateNotifBtns() {
+    const sb = document.getElementById('sound-btn');
+    const nb = document.getElementById('notif-btn');
+    if (!sb || !nb) return;
+    sb.textContent = soundEnabled ? '🔊' : '🔇';
+    sb.classList.toggle('active', soundEnabled);
+    sb.classList.toggle('off',   !soundEnabled);
+    nb.classList.toggle('active', notifEnabled);
+    nb.classList.toggle('off',   !notifEnabled);
+  }
+
+  // ── DLQ Detection ─────────────────────────────────────────────────────────
+  const DLQ_PATTERNS = [
+    /dead.?letter/i,
+    /\.dlq$/i, /^dlq\./i, /_dlq$/i, /^dlq_/i,
+    /dead$/i,  /\.dead$/i, /_dead$/i,
+    /\.dlx$/i, /_dlx$/i,
+    /-dl$/i,   /\.dl$/i,  /_dl$/i,   // q.contents-dl, q.device-dl 등
+  ];
+
+  function isDLQ(name) {
+    return DLQ_PATTERNS.some(p => p.test(name));
+  }
+
+  // ── Connection ─────────────────────────────────────────────────────────────
+  function getConfig() {
+    const proxy = (document.getElementById('rmq-proxy').value || '').trim().replace(/\/$/, '');
+    return {
+      url:   document.getElementById('rmq-url').value.trim().replace(/\/$/, ''),
+      user:  document.getElementById('rmq-user').value.trim(),
+      pass:  document.getElementById('rmq-pass').value,
+      proxy: proxy,
+    };
+  }
+
+  function updateProxyIndicator() {
+    const proxy = (document.getElementById('rmq-proxy').value || '').trim();
+    document.getElementById('proxy-indicator').classList.toggle('on', proxy.length > 0);
+  }
+
+  function authHeader(user, pass) {
+    return 'Basic ' + btoa(unescape(encodeURIComponent(user + ':' + pass)));
+  }
+
+  async function fetchQueues() {
+    const { url, user, pass, proxy } = getConfig();
+    const baseUrl = proxy || url;
+
+    const hdrs = {
+      'Authorization': authHeader(user, pass),
+      'Accept':        'application/json',
+    };
+    if (proxy) hdrs['X-RabbitMQ-URL'] = url;
+
+    async function get(path) {
+      const requestUrl = baseUrl + path;
+      let res;
+      try {
+        res = await fetch(requestUrl, { headers: hdrs });
+      } catch (networkErr) {
+        const err = new Error(networkErr.message || 'Network request failed');
+        err.errorType  = isCorsLike(networkErr) ? 'cors' : 'network';
+        err.requestUrl = requestUrl;
+        err.usingProxy = !!proxy;
+        err.stack      = networkErr.stack || '';
+        throw err;
+      }
+      if (!res.ok) {
+        let body = ''; try { body = await res.text(); } catch { /* ignore */ }
+        const err = new Error(`HTTP ${res.status} ${res.statusText}`);
+        err.errorType    = 'http';
+        err.status       = res.status;
+        err.statusText   = res.statusText;
+        err.requestUrl   = requestUrl;
+        err.usingProxy   = !!proxy;
+        err.responseBody = body;
+        err.stack        = '';
+        throw err;
+      }
+      return res.json();
+    }
+
+    // ① 쿼리 파라미터 없이 첫 요청 → 구/신 모든 버전 호환
+    const first = await get('/api/queues');
+
+    // 응답이 배열 → 구버전 (RabbitMQ < 3.7), 완료
+    if (Array.isArray(first)) return first;
+
+    // 페이지네이션 응답 (RabbitMQ 3.7+)
+    const items     = first.items || [];
+    const total     = first.total_count ?? first.filtered_count ?? items.length;
+    const pageSize  = first.page_size || items.length || 100;
+    const pages     = pageSize > 0 ? Math.ceil(total / pageSize) : 1;
+
+    if (pages <= 1) return items;
+
+    // ② 나머지 페이지는 서버의 page_size를 그대로 사용
+    const rest = await Promise.all(
+      Array.from({ length: pages - 1 }, (_, i) =>
+        get(`/api/queues?page=${i + 2}&page_size=${pageSize}`)
+      )
+    );
+    return items.concat(rest.flatMap(r => Array.isArray(r) ? r : (r.items || [])));
+  }
+
+  function isCorsLike(err) {
+    const msg = (err.message || '').toLowerCase();
+    // TypeError + "Failed to fetch" 는 CORS 또는 네트워크 불능이 대부분
+    if (err instanceof TypeError && (msg.includes('failed to fetch') || msg.includes('fetch'))) {
+      return true;
+    }
+    return msg.includes('cors') || msg.includes('cross') ||
+           msg.includes('blocked') || msg.includes('access-control');
+  }
+
+  async function connect() {
+    setStatus('connecting');
+    try {
+      const data = await fetchQueues();
+      queues = data;
+      connected = true;
+      setStatus('connected');
+      updateActivityTracking(queues);
+      detectReadyAlerts(queues, false);        // 초기화만 (첫 연결 시 기존 메시지 알림 제외)
+      detectLowPublishRateAlerts(queues, false); // 초기화만
+      updateStats();
+      renderTable();
+      checkDLQ();
+      updateTabTitle();
+      startPolling();
+      showToast('RabbitMQ 연결 성공!', 'success');
+      updateLastUpdated();
+    } catch (e) {
+      setStatus('error');
+      connected = false;
+      stopPolling();
+      showErrorModal(e, '연결 오류', '연결 시도 중 오류가 발생했습니다');
+    }
+  }
+
+  async function refresh() {
+    if (!connected) return;
+    try {
+      const data = await fetchQueues();
+      queues = data;
+      setStatus('connected');
+      updateActivityTracking(queues);
+      detectReadyAlerts(queues, true);          // 변화 감지 → 0→N 전환 시 알림
+      detectLowPublishRateAlerts(queues, true); // Publish/s 저하 감지
+      updateStats();
+      renderTable();
+      checkDLQ();
+      updateTabTitle();
+      updateLastUpdated();
+    } catch (e) {
+      setStatus('error');
+      showToast('갱신 실패: ' + e.message, 'error');
+      // Only show the detail modal on the first refresh failure after being connected
+      if (!window._refreshErrShown) {
+        window._refreshErrShown = true;
+        showErrorModal(e, '갱신 오류', '데이터를 가져오는 중 오류가 발생했습니다');
+      }
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    startCountdown();
+    intervalId = setInterval(() => {
+      refresh();
+      startCountdown();
+    }, INTERVAL);
+  }
+
+  function stopPolling() {
+    if (intervalId) { clearInterval(intervalId); intervalId = null; }
+    if (countdownId) { clearInterval(countdownId); countdownId = null; }
+  }
+
+  function startCountdown() {
+    if (countdownId) clearInterval(countdownId);
+    countdownSec = 5;
+    updateCountdown(countdownSec);
+    countdownId = setInterval(() => {
+      countdownSec--;
+      updateCountdown(countdownSec);
+      if (countdownSec <= 0) clearInterval(countdownId);
+    }, 1000);
+  }
+
+  function updateCountdown(sec) {
+    document.getElementById('countdown-text').textContent = Math.max(0, sec);
+    const pct = sec / 5;
+    const offset = CIRCUMFERENCE * (1 - pct);
+    document.getElementById('progress-circle').style.strokeDashoffset = offset;
+  }
+
+  function updateLastUpdated() {
+    const now = new Date();
+    document.getElementById('last-updated').textContent =
+      '업데이트: ' + now.toLocaleTimeString('ko-KR');
+  }
+
+  // ── Status Badge ──────────────────────────────────────────────────────────
+  function setStatus(state) {
+    const badge = document.getElementById('conn-badge');
+    const text  = document.getElementById('conn-text');
+    const dot   = document.getElementById('pulse-dot');
+    badge.className = 'connection-badge ' + state;
+    const labels = { disconnected: '연결 안됨', connecting: '연결 중...', connected: '연결됨', error: '오류' };
+    text.textContent = labels[state] || state;
+    dot.className = 'pulse' + (state === 'connected' || state === 'connecting' ? ' animate' : '');
+  }
+
+  // ── Stats ─────────────────────────────────────────────────────────────────
+  function updateStats() {
+    const totalQueues   = queues.length;
+    const totalReady    = queues.reduce((s, q) => s + (q.messages_ready || 0), 0);
+    const totalUnacked  = queues.reduce((s, q) => s + (q.messages_unacknowledged || 0), 0);
+    const totalConsumers= queues.reduce((s, q) => s + (q.consumers || 0), 0);
+    const dlqQueues     = queues.filter(q => isDLQ(q.name));
+    const totalDLQ      = dlqQueues.reduce((s, q) => s + (q.messages || 0), 0);
+
+    document.getElementById('stat-total').textContent     = totalQueues;
+    document.getElementById('stat-ready').textContent     = totalReady.toLocaleString();
+    document.getElementById('stat-unacked').textContent   = totalUnacked.toLocaleString();
+    document.getElementById('stat-consumers').textContent = totalConsumers;
+    document.getElementById('stat-dlq').textContent       = totalDLQ.toLocaleString();
+  }
+
+  // ── Filter & Sort ─────────────────────────────────────────────────────────
+  function setFilter(mode, el) {
+    filterMode = mode;
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    el.classList.add('active');
+    renderTable();
+  }
+
+  function sortBy(key) {
+    if (sortKey === key) { sortAsc = !sortAsc; }
+    else { sortKey = key; sortAsc = true; }
+    document.querySelectorAll('thead th').forEach(th => th.classList.remove('sorted'));
+    const idx = ['name','vhost','state','messages_ready','messages_unacknowledged','messages','consumers','publish_rate','deliver_rate','memory'];
+    const i = idx.indexOf(key);
+    if (i >= 0) {
+      const ths = document.querySelectorAll('thead th');
+      ths[i].classList.add('sorted');
+      ths[i].querySelector('.sort-icon').textContent = sortAsc ? '↑' : '↓';
+    }
+    renderTable();
+  }
+
+  function getRate(q, type) {
+    try { return q.message_stats[type + '_details'].rate; } catch { return 0; }
+  }
+
+  function filteredQueues() {
+    const search = document.getElementById('search-input').value.toLowerCase();
+    return queues.filter(q => {
+      if (search && !q.name.toLowerCase().includes(search)) return false;
+      if (filterMode === 'active')      return (q.messages || 0) > 0;
+      if (filterMode === 'dlq')         return isDLQ(q.name);
+      if (filterMode === 'no-consumer') return (q.consumers || 0) === 0;
+      return true;
+    });
+  }
+
+  function sortedQueues() {
+    const list = filteredQueues().slice();
+    list.sort((a, b) => {
+      let va, vb;
+      if (sortKey === 'name')    { va = a.name;  vb = b.name;  }
+      else if (sortKey === 'vhost')  { va = a.vhost; vb = b.vhost; }
+      else if (sortKey === 'state')  { va = a.state; vb = b.state; }
+      else if (sortKey === 'last_activity') {
+        va = (lastActivityMap.get(queueKey(a)) || new Date(0)).getTime();
+        vb = (lastActivityMap.get(queueKey(b)) || new Date(0)).getTime();
+      }
+      else if (sortKey === 'publish_rate') { va = getRate(a,'publish'); vb = getRate(b,'publish'); }
+      else if (sortKey === 'deliver_rate') { va = getRate(a,'deliver_get'); vb = getRate(b,'deliver_get'); }
+      else { va = a[sortKey] || 0; vb = b[sortKey] || 0; }
+      if (va < vb) return sortAsc ? -1 : 1;
+      if (va > vb) return sortAsc ? 1  : -1;
+      return 0;
+    });
+    return list;
+  }
+
+  // ── Render Table ───────────────────────────────────────────────────────────
+  function renderTable() {
+    const tbody = document.getElementById('queue-tbody');
+    const list  = sortedQueues();
+
+    document.getElementById('queue-count-label').textContent = `${list.length}개 / 전체 ${queues.length}개`;
+
+    if (!connected) return;
+
+    if (list.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="11">
+        <div class="empty-state">
+          <div class="icon">🔍</div>
+          <p>조건에 맞는 Queue가 없습니다</p>
+          <small>필터를 변경하거나 검색어를 확인해 주세요</small>
+        </div>
+      </td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = list.map(q => {
+      const dlq = isDLQ(q.name);
+      const ready    = q.messages_ready || 0;
+      const unacked  = q.messages_unacknowledged || 0;
+      const total    = q.messages || 0;
+      const consumers= q.consumers || 0;
+      const mem      = formatBytes(q.memory || 0);
+      const pubRate  = getRate(q, 'publish');
+      const delRate  = getRate(q, 'deliver_get');
+
+      const stateClass = { running: 'badge-running', idle: 'badge-idle', flow: 'badge-flow' }[q.state] || 'badge-down';
+      const stateLabel = { running: '● 실행 중', idle: '○ 대기', flow: '⚡ 흐름제어', down: '✕ 중단' }[q.state] || (q.state || '알 수 없음');
+
+      return `<tr class="${dlq ? 'dlq-row' : ''}">
+        <td>
+          <div class="queue-name">
+            ${escapeHtml(q.name)}
+            ${dlq ? '<span class="dlq-tag">DLQ</span>' : ''}
+          </div>
+        </td>
+        <td style="color:var(--text-muted);font-size:12px">${escapeHtml(q.vhost)}</td>
+        <td><span class="badge ${stateClass}">${stateLabel}</span></td>
+        <td>${formatLastActivity(q)}</td>
+        <td class="num ready">${ready.toLocaleString()}</td>
+        <td class="num unacked">${unacked.toLocaleString()}</td>
+        <td class="num total ${(dlq && total > 0) ? 'danger-num' : ''}">${total.toLocaleString()}</td>
+        <td class="num"><span class="consumer-count ${consumers > 0 ? 'has-consumers' : ''}">${consumers}</span></td>
+        <td class="num"><span class="rate ${pubRate > LOW_PUBLISH_THRESHOLD ? 'positive' : pubRate > 0 ? 'low-warning' : ''}">${pubRate.toFixed(1)}</span></td>
+        <td class="num"><span class="rate ${delRate > 0 ? 'positive' : ''}">${delRate.toFixed(1)}</span></td>
+        <td class="num" style="color:var(--text-muted);font-size:12px">${mem}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ── DLQ Alert ─────────────────────────────────────────────────────────────
+  function checkDLQ() {
+    if (alertMuted) return;
+
+    const dlqWithMessages = queues.filter(q => isDLQ(q.name) && (q.messages || 0) > 0);
+    const newDLQs = dlqWithMessages.filter(q => !shownDLQAlerts.has(q.name + ':' + q.vhost));
+
+    if (newDLQs.length > 0) {
+      newDLQs.forEach(q => {
+        shownDLQAlerts.add(q.name + ':' + q.vhost);
+        addAlertBanner(q);
+      });
+      playAlertSound('critical');
+      sendOSNotif(
+        `🚨 Dead Letter Queue 감지! (${newDLQs.reduce((s, q) => s + (q.messages || 0), 0)}개)`,
+        `Queue: ${newDLQs.map(q => q.name).join(', ')}`,
+        'rabbitmq-dlq'
+      );
+      showDLQModal(newDLQs);
+    }
+
+    // Update existing banners
+    updateAlertBanners(dlqWithMessages);
+  }
+
+  function addAlertBanner(q) {
+    const container = document.getElementById('alert-container');
+    const id = 'alert-' + btoa(q.name + q.vhost).replace(/[^a-zA-Z0-9]/g, '');
+    if (document.getElementById(id)) return;
+
+    const el = document.createElement('div');
+    el.className = 'alert-item';
+    el.id = id;
+    el.dataset.queue = q.name;
+    el.dataset.vhost = q.vhost;
+    el.innerHTML = `
+      <span class="alert-icon">🚨</span>
+      <div class="alert-content">
+        <div class="alert-title">Dead Letter Queue 감지: ${escapeHtml(q.name)}</div>
+        <div class="alert-msg" id="${id}-msg">
+          Vhost: ${escapeHtml(q.vhost)} | 메시지 수: <strong>${(q.messages||0).toLocaleString()}</strong>개
+        </div>
+      </div>
+      <button class="alert-close" onclick="dismissAlert('${id}')">×</button>
+    `;
+    container.appendChild(el);
+  }
+
+  function updateAlertBanners(dlqList) {
+    dlqList.forEach(q => {
+      const id = 'alert-' + btoa(q.name + q.vhost).replace(/[^a-zA-Z0-9]/g, '');
+      const msgEl = document.getElementById(id + '-msg');
+      if (msgEl) {
+        msgEl.innerHTML = `Vhost: ${escapeHtml(q.vhost)} | 메시지 수: <strong>${(q.messages||0).toLocaleString()}</strong>개`;
+      }
+    });
+  }
+
+  function dismissAlert(id) {
+    const el = document.getElementById(id);
+    if (el) el.remove();
+  }
+
+  function showDLQModal(dlqs) {
+    const body = document.getElementById('modal-body');
+    body.innerHTML = dlqs.map(q =>
+      `<p>큐 <strong>${escapeHtml(q.name)}</strong> (vhost: <strong>${escapeHtml(q.vhost)}</strong>)에<br>
+       메시지 <strong style="color:var(--dlq)">${(q.messages||0).toLocaleString()}개</strong>가 쌓여 있습니다.</p>`
+    ).join('<hr style="border-color:var(--border);margin:12px 0">');
+    document.getElementById('dlq-modal').classList.add('show');
+  }
+
+  function closeDLQModal() {
+    document.getElementById('dlq-modal').classList.remove('show');
+  }
+
+  function muteAlerts() {
+    alertMuted = true;
+    closeDLQModal();
+    showToast('이 세션에서 DLQ 알림을 끕니다.', 'info');
+  }
+
+  // ── Error Modal ───────────────────────────────────────────────────────────
+  function showErrorModal(err, title = '연결 오류', subtitle = '') {
+    const { url } = getConfig();
+
+    // ── Title & subtitle
+    document.getElementById('err-title').textContent    = title;
+    document.getElementById('err-subtitle').textContent = subtitle || diagSubtitle(err);
+
+    // ── Request URL
+    document.getElementById('err-url').textContent = err.requestUrl || url || '—';
+
+    // ── Badges
+    const badgesEl = document.getElementById('err-badges');
+    badgesEl.innerHTML = buildBadges(err);
+
+    // ── Error message
+    document.getElementById('err-msg').textContent = err.message || String(err);
+
+    // ── Causes
+    document.getElementById('err-causes').innerHTML =
+      diagnoseCauses(err).map(c => `<li>${c}</li>`).join('');
+
+    // ── Technical detail
+    const detail = buildTechDetail(err);
+    document.getElementById('err-detail-body').textContent = detail;
+    document.getElementById('err-detail-body').classList.remove('open');
+    document.getElementById('err-toggle-btn').classList.remove('open');
+    document.getElementById('err-technical-section').style.display = detail ? '' : 'none';
+
+    // ── Reset refresh-error guard when a new error modal is explicitly shown
+    window._refreshErrShown = false;
+
+    document.getElementById('error-modal').classList.add('show');
+  }
+
+  function closeErrorModal() {
+    document.getElementById('error-modal').classList.remove('show');
+  }
+
+  function toggleErrDetail() {
+    const body = document.getElementById('err-detail-body');
+    const btn  = document.getElementById('err-toggle-btn');
+    body.classList.toggle('open');
+    btn.classList.toggle('open');
+  }
+
+  function buildBadges(err) {
+    const badges = [];
+    if (err.errorType === 'cors') {
+      badges.push('<span class="err-badge err-badge-cors">CORS 오류</span>');
+    } else if (err.errorType === 'network') {
+      badges.push('<span class="err-badge err-badge-net">네트워크 오류</span>');
+    } else if (err.errorType === 'http') {
+      badges.push('<span class="err-badge err-badge-type">HTTP 오류</span>');
+      badges.push(`<span class="err-badge err-badge-code">상태 코드: ${err.status} ${err.statusText}</span>`);
+    } else {
+      badges.push('<span class="err-badge err-badge-type">알 수 없는 오류</span>');
+    }
+    return badges.join('');
+  }
+
+  function diagSubtitle(err) {
+    if (err.errorType === 'cors')    return 'CORS 정책으로 인해 요청이 차단되었습니다';
+    if (err.errorType === 'network') return '서버에 연결할 수 없습니다';
+    if (err.status === 401)          return '인증에 실패했습니다 (401 Unauthorized)';
+    if (err.status === 403)          return '접근 권한이 없습니다 (403 Forbidden)';
+    if (err.status === 404)          return '엔드포인트를 찾을 수 없습니다 (404 Not Found)';
+    if (err.status >= 500)           return `서버 내부 오류가 발생했습니다 (${err.status})`;
+    return '요청 처리 중 오류가 발생했습니다';
+  }
+
+  function diagnoseCauses(err) {
+    const { url, user } = getConfig();
+
+    if (err.errorType === 'cors') {
+      const proxyActive = !!document.getElementById('rmq-proxy').value.trim();
+      if (proxyActive) {
+        return [
+          '<strong>프록시 서버 미실행</strong> — <code>python rabbitmq-proxy.py</code>가 실행 중인지 확인하세요',
+          '<strong>프록시 포트 불일치</strong> — 스크립트의 <code>PORT</code>와 프록시 URL의 포트가 동일한지 확인하세요 (기본 15673)',
+          '<strong>프록시 URL 형식 오류</strong> — <code>http://localhost:15673</code> 형식이 맞는지 확인하세요 (http://, 슬래시 없이)',
+        ];
+      }
+      return [
+        `<strong>① Python 프록시 사용 [추천]</strong> — 아래 "🐍 프록시 스크립트 생성" 버튼 클릭 → <code>python rabbitmq-proxy.py</code> 실행 → 프록시 URL에 <code>http://localhost:15673</code> 입력 후 재연결`,
+        `<strong>② RabbitMQ CORS 설정</strong> — <code>rabbitmq.conf</code>에 추가 후 재시작:<br><code style="display:block;margin-top:4px;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px">management.cors.allow_origins.1 = *\nmanagement.cors.allow_headers.1 = Authorization\nmanagement.cors.allow_headers.2 = Content-Type</code>`,
+        '<strong>③ 브라우저 확장 프로그램</strong> — Chrome: "CORS Unblock" 또는 "Allow CORS: Access-Control-Allow-Origin" 설치 후 활성화',
+        '<strong>④ HTML 파일 직접 열기 문제</strong> — <code>file://</code> 오리진에서 <code>https://</code> 호출은 브라우저가 항상 차단합니다. 위 방법 중 하나를 반드시 사용해야 합니다',
+      ];
+    }
+
+    if (err.errorType === 'network') {
+      return [
+        `<strong>RabbitMQ 서버 미실행</strong> — <code>${url}</code> 서버가 실행 중인지 확인하세요`,
+        '<strong>Management Plugin 비활성화</strong> — <code>rabbitmq-plugins enable rabbitmq_management</code> 명령으로 플러그인을 활성화하세요',
+        '<strong>방화벽/포트 차단</strong> — 포트 <code>15672</code>가 방화벽에서 허용되어 있는지 확인하세요',
+        '<strong>잘못된 URL</strong> — URL 형식이 <code>http://host:15672</code>인지 확인하세요',
+      ];
+    }
+
+    if (err.status === 401) {
+      return [
+        `<strong>잘못된 사용자 이름</strong> — 입력한 Username <code>${escapeHtml(user)}</code>이 올바른지 확인하세요`,
+        '<strong>잘못된 비밀번호</strong> — Password를 다시 확인하세요',
+        '<strong>계정 잠금</strong> — RabbitMQ 관리자 콘솔에서 계정 상태를 확인하세요',
+        '<strong>기본 계정 비활성화</strong> — <code>guest</code> 계정은 localhost 접속만 허용됩니다. 원격 접속 시 별도 계정을 생성하세요',
+      ];
+    }
+
+    if (err.status === 403) {
+      return [
+        `<strong>권한 부족</strong> — <code>${escapeHtml(user)}</code> 계정에 Management API 접근 권한이 없습니다`,
+        '<strong>Vhost 권한 없음</strong> — 해당 계정의 Vhost 접근 권한을 확인하세요',
+        '<strong>태그 미설정</strong> — 계정에 <code>management</code> 또는 <code>administrator</code> 태그를 설정하세요',
+      ];
+    }
+
+    if (err.status === 404) {
+      return [
+        `<strong>잘못된 URL</strong> — <code>${escapeHtml(err.requestUrl || url)}</code> 경로가 올바른지 확인하세요`,
+        '<strong>Management Plugin 미설치</strong> — <code>rabbitmq-plugins enable rabbitmq_management</code>를 실행하세요',
+        '<strong>포트 오류</strong> — Management UI 포트(기본값 <code>15672</code>)가 맞는지 확인하세요',
+      ];
+    }
+
+    if (err.status >= 500) {
+      return [
+        `<strong>서버 내부 오류 (${err.status})</strong> — RabbitMQ 서버 로그를 확인하세요`,
+        '<strong>메모리/디스크 부족</strong> — RabbitMQ 서버 리소스 상태를 점검하세요',
+        '<strong>서버 재시작 필요</strong> — <code>rabbitmqctl restart_app</code>으로 애플리케이션을 재시작하세요',
+      ];
+    }
+
+    return [
+      '<strong>네트워크 상태 확인</strong> — 인터넷 연결 및 서버 접근성을 확인하세요',
+      '<strong>URL 형식 확인</strong> — <code>http://host:15672</code> 형식이 맞는지 점검하세요',
+      '<strong>RabbitMQ 서버 로그 확인</strong> — 서버 측 로그에서 자세한 오류 원인을 찾으세요',
+    ];
+  }
+
+  function buildTechDetail(err) {
+    const lines = [];
+    lines.push(`Type       : ${err.errorType || typeof err}`);
+    lines.push(`Message    : ${err.message}`);
+    if (err.status)       lines.push(`HTTP Status: ${err.status} ${err.statusText}`);
+    if (err.requestUrl)   lines.push(`Request URL: ${err.requestUrl}`);
+    if (err.responseBody) lines.push(`\nResponse Body:\n${err.responseBody.substring(0, 500)}`);
+    if (err.stack)        lines.push(`\nStack Trace:\n${err.stack}`);
+    return lines.join('\n');
+  }
+
+  // ── Proxy Script Generator ────────────────────────────────────────────────
+  function downloadProxyScript() {
+    const { url } = getConfig();
+    const rmqUrl  = url || 'https://localhost:15672';
+
+    const script = `#!/usr/bin/env python3
+"""
+RabbitMQ Management CORS Proxy
+================================
+Python 3 표준 라이브러리만 사용 (pip install 불필요)
+
+[실행 방법]
+  python rabbitmq-proxy.py
+
+[모니터 HTML 설정]
+  프록시 URL 입력란에: http://localhost:15673
+
+[종료]
+  Ctrl+C
+"""
+import ssl
+import urllib.request
+import urllib.error
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+RABBITMQ_URL = "${rmqUrl}"   # ← RabbitMQ Management URL
+PROXY_PORT   = 15673          # ← 로컬 프록시 포트 (변경 가능)
+
+# SSL 인증서 검증 무시 (자체 서명 인증서 환경)
+ssl_ctx = ssl.create_default_context()
+ssl_ctx.check_hostname = False
+ssl_ctx.verify_mode    = ssl.CERT_NONE
+
+
+class CORSProxyHandler(BaseHTTPRequestHandler):
+
+    def log_message(self, fmt, *args):
+        # 요청 로그 간소화
+        print(f"  [{self.command}] {self.path}  →  {RABBITMQ_URL}{self.path}")
+
+    def _send_cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin",  "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-RabbitMQ-URL")
+        self.send_header("Access-Control-Max-Age",       "86400")
+
+    def do_OPTIONS(self):
+        """CORS preflight 처리"""
+        self.send_response(204)
+        self._send_cors_headers()
+        self.end_headers()
+
+    def do_GET(self):
+        """실제 RabbitMQ API 요청 프록시"""
+        target = RABBITMQ_URL + self.path
+        auth   = self.headers.get("Authorization", "")
+
+        req = urllib.request.Request(
+            target,
+            headers={"Authorization": auth, "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
+                body        = resp.read()
+                status      = resp.status
+                content_type = resp.headers.get("Content-Type", "application/json")
+        except urllib.error.HTTPError as e:
+            body         = e.read()
+            status       = e.code
+            content_type = "application/json"
+        except Exception as e:
+            body         = str(e).encode()
+            status       = 502
+            content_type = "text/plain"
+
+        self.send_response(status)
+        self.send_header("Content-Type",   content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self._send_cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
+
+if __name__ == "__main__":
+    server = HTTPServer(("localhost", PROXY_PORT), CORSProxyHandler)
+    print("=" * 55)
+    print(f"  🐇 RabbitMQ CORS Proxy 시작")
+    print(f"  로컬 주소 : http://localhost:{PROXY_PORT}")
+    print(f"  대상 서버 : {RABBITMQ_URL}")
+    print(f"  모니터 HTML 프록시 URL: http://localhost:{PROXY_PORT}")
+    print("=" * 55)
+    print("  종료하려면 Ctrl+C 를 누르세요")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\\n  프록시 서버를 종료합니다.")
+        server.server_close()
+`;
+
+    const blob = new Blob([script], { type: 'text/plain;charset=utf-8' });
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = 'rabbitmq-proxy.py';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+
+    showToast('rabbitmq-proxy.py 다운로드 완료! python rabbitmq-proxy.py 로 실행하세요.', 'success');
+  }
+
+  // ── UI Helpers ────────────────────────────────────────────────────────────
+  let panelOpen = true;
+  function togglePanel() {
+    panelOpen = !panelOpen;
+    const d = panelOpen ? '' : 'none';
+    document.querySelector('.conn-form').style.display      = d;
+    document.querySelector('.conn-proxy-row').style.display = d;
+    document.querySelector('.cors-note').style.display      = d;
+    document.querySelector('.connection-panel .btn-secondary').textContent = panelOpen ? '접기' : '펼치기';
+  }
+
+  let toastTimer;
+  function showToast(msg, type = 'info') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = `toast-${type} show`;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.classList.remove('show'); }, 3000);
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B','KB','MB','GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeDLQModal(); closeReadyModal(); closeErrorModal(); closeLowPublishModal(); }
+    if (e.key === 'r' && !e.ctrlKey && document.activeElement.tagName !== 'INPUT') refresh();
+  });
+
+  // ── 로컬 서버에서 열린 경우 프록시 URL 자동 설정 ─────────────────────────
+  (function autoDetectServer() {
+    const loc = window.location;
+    if (loc.protocol === 'file:') return;                         // file:// 직접 열기 → 자동설정 불필요
+    const isLocal = loc.hostname === 'localhost' || loc.hostname === '127.0.0.1';
+    if (!isLocal) return;                                         // 외부 서버에서 열린 경우 제외
+    const proxyInput = document.getElementById('rmq-proxy');
+    if (proxyInput && !proxyInput.value) {
+      proxyInput.value = loc.origin;                             // e.g. http://localhost:8080
+      updateProxyIndicator();
+      console.info('[Monitor] 로컬 서버 감지 → 프록시 URL 자동 설정:', loc.origin);
+    }
+  })();
+
+  // Init countdown ring
+  updateCountdown(0);
+
+  // 페이지 로드 시 자동 연결
+  window.addEventListener('load', () => connect());
+</script>
+</body>
+</html>
