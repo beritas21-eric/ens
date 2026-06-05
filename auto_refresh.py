@@ -45,9 +45,9 @@ TARGET_URL         = "https://esdr.skax-sv-ai.com/device-management/monitoring-e
 LOGIN_ID           = "kukil.kang"
 LOGIN_PW           = "#Skcc03477"
 START_HOUR         = 8    # 오전 8시
-START_MINUTE       = 30   # 오전 8시 30분
 END_HOUR           = 17   # 오후 5시 자동 종료
 KEEPALIVE_INTERVAL = 30   # 초
+DRONE_ALTITUDE_M   = 100  # 드론 고도 가정값 (m)
 
 # Windows SetThreadExecutionState 플래그
 ES_CONTINUOUS       = 0x80000000  # 지속 유지
@@ -420,6 +420,9 @@ def navigate_to_target(driver, max_retries=3):
 
             # ⑤ 이후 팝업 자동처리 Observer 재주입
             inject_auto_ok_observer(driver)
+
+            # ⑥ Device 뷰 자동 설정 (첫 번째 Device 선택 + 라디오 버튼 + 지도 줌)
+            setup_device_view(driver, DRONE_ALTITUDE_M)
             return True
 
         except UnexpectedAlertPresentException:
@@ -439,10 +442,197 @@ def is_logged_in(driver):
 
 
 # ──────────────────────────────────────────────
+# Device 뷰 자동 설정
+# ──────────────────────────────────────────────
+
+def altitude_to_zoom(altitude_m):
+    """드론 고도(m) → OpenLayers 줌 레벨 변환
+    고도 100m ≒ 1:1,000 축척 ≒ zoom 17
+    """
+    thresholds = [
+        (10,  20),
+        (30,  19),
+        (50,  18),
+        (100, 17),
+        (200, 16),
+        (500, 15),
+        (1000, 14),
+    ]
+    for max_alt, zoom in thresholds:
+        if altitude_m <= max_alt:
+            return zoom
+    return 13
+
+
+def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
+    """Device List 첫 번째 항목 자동 선택 +
+    '실시간 화면 켜짐' / '드론 추적 켜짐' 라디오 버튼 활성화 +
+    드론 고도에 맞는 지도 자동 확대/축소
+    """
+    zoom = altitude_to_zoom(altitude_m)
+    time.sleep(1.5)   # 페이지 렌더링 대기
+
+    try:
+        result = driver.execute_script("""
+            var zoom    = arguments[0];
+            var res     = {device:null, realtime:null, tracking:null, mapZoom:null};
+
+            // ─── ① Device List 첫 번째 항목 클릭 ──────────────────────
+            // "Device List (N)" 헤더를 찾아 가장 가까운 부모 컨테이너에서
+            // 첫 번째 리스트 항목 클릭
+            (function(){
+                var walker = document.createTreeWalker(
+                    document.body, NodeFilter.SHOW_TEXT, null, false);
+                var node;
+                while((node = walker.nextNode())){
+                    if(/Device\\s+List\\s*\\(\\d+\\)/i.test(node.textContent.trim())){
+                        var container = node.parentElement;
+                        // 부모를 최대 5단계까지 올라가며 리스트 항목 탐색
+                        for(var d = 0; d < 5; d++){
+                            container = container.parentElement;
+                            if(!container) break;
+                            var items = container.querySelectorAll(
+                                'li, [class*="item"], [class*="device-card"],' +
+                                '[class*="list-row"], [class*="row"]');
+                            if(items.length > 0){
+                                items[0].click();
+                                res.device = items[0].textContent.trim()
+                                              .replace(/\\s+/g,' ').substring(0,60);
+                                return;
+                            }
+                        }
+                    }
+                }
+            })();
+
+            // ─── ② 라디오/토글 버튼 클릭 헬퍼 ────────────────────────
+            function clickByLabels(labels){
+                var all = document.querySelectorAll(
+                    'label, span, div, button, input[type="radio"], ' +
+                    '[class*="radio"], [class*="toggle"], [class*="btn"]');
+                for(var i = 0; i < all.length; i++){
+                    var txt = all[i].textContent.trim();
+                    for(var j = 0; j < labels.length; j++){
+                        if(txt === labels[j]){
+                            all[i].click();
+                            return txt;
+                        }
+                    }
+                }
+                // 부분 일치 재시도
+                for(var i = 0; i < all.length; i++){
+                    var txt = all[i].textContent.trim();
+                    for(var j = 0; j < labels.length; j++){
+                        if(txt.indexOf(labels[j]) > -1){
+                            all[i].click();
+                            return txt;
+                        }
+                    }
+                }
+                return null;
+            }
+
+            res.realtime = clickByLabels(['실시간 화면 켜짐','실시간화면켜짐','실시간 화면 ON']);
+            res.tracking = clickByLabels(['드론 추적 켜짐','드론추적켜짐','드론 추적 ON']);
+
+            // ─── ③ OpenLayers 지도 줌 설정 ────────────────────────────
+            var mapFound = false;
+
+            // 전략 1: window 전역 객체 탐색
+            var gKeys = ['map','olMap','mapInstance','leaflet','viewer'];
+            for(var k = 0; k < gKeys.length && !mapFound; k++){
+                try{
+                    var g = window[gKeys[k]];
+                    if(g && typeof g.getView === 'function'){
+                        g.getView().setZoom(zoom);
+                        res.mapZoom = 'global:' + gKeys[k] + ':' + zoom;
+                        mapFound = true;
+                    }
+                }catch(e){}
+            }
+
+            // 전략 2: window 속성 전체 스캔
+            if(!mapFound){
+                for(var key in window){
+                    try{
+                        var v = window[key];
+                        if(v && typeof v === 'object' && typeof v.getView === 'function'){
+                            v.getView().setZoom(zoom);
+                            res.mapZoom = 'scan:' + key + ':' + zoom;
+                            mapFound = true;
+                            break;
+                        }
+                    }catch(e){}
+                }
+            }
+
+            // 전략 3: OL viewport 부모 요소 속성 탐색
+            if(!mapFound){
+                var vp = document.querySelector('.ol-viewport');
+                if(vp && vp.parentElement){
+                    for(var prop in vp.parentElement){
+                        try{
+                            if(prop.indexOf('ol_') === 0){
+                                var obj = vp.parentElement[prop];
+                                if(obj && typeof obj.getView === 'function'){
+                                    obj.getView().setZoom(zoom);
+                                    res.mapZoom = 'ol_prop:' + zoom;
+                                    mapFound = true;
+                                    break;
+                                }
+                            }
+                        }catch(e){}
+                    }
+                }
+            }
+
+            // 전략 4: Vue 인스턴스를 통한 접근
+            if(!mapFound){
+                var mapEls = document.querySelectorAll('[class*="map"], .ol-viewport');
+                for(var m = 0; m < mapEls.length && !mapFound; m++){
+                    var vm = mapEls[m].__vue__ || mapEls[m].__vueParentComponent;
+                    if(vm){
+                        var vmap = (vm.$data && vm.$data.map) ||
+                                   (vm.setupState && vm.setupState.map);
+                        if(vmap && typeof vmap.getView === 'function'){
+                            vmap.getView().setZoom(zoom);
+                            res.mapZoom = 'vue:' + zoom;
+                            mapFound = true;
+                        }
+                    }
+                }
+            }
+
+            // 전략 5 (fallback): OL 줌 버튼 클릭으로 대략 조정
+            if(!mapFound){
+                // 현재 줌 레벨 추정: 기본 15로 가정
+                var diff = zoom - 15;
+                var btnSel = diff > 0 ? '.ol-zoom-in' : '.ol-zoom-out';
+                var btn = document.querySelector(btnSel);
+                for(var n = 0; n < Math.abs(diff) && btn; n++) btn.click();
+                res.mapZoom = 'btn_fallback:' + zoom;
+            }
+
+            return res;
+        """, zoom)
+
+        if result:
+            print(f"[{_ts()}] Device 뷰 자동 설정 완료:")
+            print(f"         · Device 선택  : {result.get('device')  or '해당 없음'}")
+            print(f"         · 실시간 화면  : {result.get('realtime') or '버튼 미발견'}")
+            print(f"         · 드론 추적    : {result.get('tracking') or '버튼 미발견'}")
+            print(f"         · 지도 줌      : {result.get('mapZoom')  or '설정 실패'}"
+                  f"  (고도 {altitude_m}m → zoom {zoom})")
+
+    except Exception as e:
+        print(f"[{_ts()}] Device 뷰 설정 오류: {e}")
+
+
+# ──────────────────────────────────────────────
 # Device 변경 감지
 # ──────────────────────────────────────────────
 
-ALERT_SAVE_DIR = r"C:\Users\03477\Downloads\device_alerts"
+ALERT_SAVE_DIR = r"D:\Downloads\device_alerts"
 os.makedirs(ALERT_SAVE_DIR, exist_ok=True)
 
 
@@ -466,18 +656,19 @@ def save_alert_to_file(title, message, device_name, ts_str):
 
 
 def save_connected_file(device_name, ts_str, connected_at, status_line):
-    """Device Connected 시 개별 파일 저장. 나중에 Disconnected 시각 추가 대상.
-    파일명에 _CONN 접미사 추가 → 통합 알림 파일(save_alert_to_file)과 충돌 방지.
-    예) sidedoor1_20260601_080000_CONN.txt
+    """Device 리스트 표시 시 개별 파일 생성 — 접속시간 기록.
+    파일명: {device명}_{접속시각}_CONN.txt
+    종료시간은 나중에 append_disconnect_to_file() 로 추가.
     """
     safe_name = re.sub(r'[\\/:*?"<>|]', '_', device_name)
-    filename  = f"{safe_name}_{ts_str}_CONN.txt"   # _CONN 접미사로 충돌 방지
+    filename  = f"{safe_name}_{ts_str}_CONN.txt"
     filepath  = os.path.join(ALERT_SAVE_DIR, filename)
     content   = "\n".join([
-        f"Device    : {device_name}",
+        f"Device명  : {device_name}",
         "=" * 50,
-        f"상태      : Disconnected  →  Connected",
-        f"Connected : {connected_at}",
+        f"접속시간  : {connected_at}",
+        f"종료시간  : (접속 중)",
+        f"접속지속  : -",
         "=" * 50,
         status_line,
         "",
@@ -485,17 +676,17 @@ def save_connected_file(device_name, ts_str, connected_at, status_line):
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
-        print(f"[{_ts()}] Connected 파일 저장: {filepath}")
+        print(f"[{_ts()}] [{device_name}] 접속시간 기록: {filepath}")
         return filepath
     except Exception as e:
-        print(f"[{_ts()}] Connected 파일 저장 오류: {e}")
+        print(f"[{_ts()}] 접속 파일 저장 오류: {e}")
         return None
 
 
 def append_disconnect_to_file(filepath, device_name, connected_at, disappeared_at):
-    """기존 Connected 파일에 리스트에서 사라진 시각 및 연결 지속 시간 추가."""
+    """기존 접속 파일에 종료시간 및 접속 지속시간 추가."""
     try:
-        # 연결 지속 시간 계산
+        # 접속 지속 시간 계산
         try:
             fmt  = '%Y-%m-%d %H:%M:%S'
             t0   = datetime.datetime.strptime(connected_at,   fmt)
@@ -505,13 +696,26 @@ def append_disconnect_to_file(filepath, device_name, connected_at, disappeared_a
         except Exception:
             dur = "계산 불가"
 
-        with open(filepath, 'a', encoding='utf-8') as f:
-            f.write("\n" + "=" * 50 + "\n")
-            f.write(f"[리스트에서 사라짐]\n")
-            f.write(f"사라진 시각  : {disappeared_at}\n")
-            f.write(f"연결 지속    : {dur}\n")
-            f.write("=" * 50 + "\n")
-        print(f"[{_ts()}] 리스트 사라진 시각 추가 저장: {filepath}")
+        # 파일 내용 전체 교체: "종료시간: (접속 중)" → 실제 종료시간으로 업데이트
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            content = content.replace(
+                "종료시간  : (접속 중)", f"종료시간  : {disappeared_at}"
+            ).replace(
+                "접속지속  : -", f"접속지속  : {dur}"
+            )
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+        except Exception:
+            # 읽기/교체 실패 시 append 방식으로 fallback
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write("\n" + "=" * 50 + "\n")
+                f.write(f"종료시간  : {disappeared_at}\n")
+                f.write(f"접속지속  : {dur}\n")
+                f.write("=" * 50 + "\n")
+
+        print(f"[{_ts()}] [{device_name}] 종료시간 기록: {filepath}")
     except Exception as e:
         print(f"[{_ts()}] 파일 업데이트 오류: {e}")
 
@@ -680,12 +884,18 @@ def check_device_changes(driver, state):
     alerts       = []
 
     # ── 개별 Device 리스트 출현/소멸 기반 파일 처리 ────────────────────────
-    # ※ Disconnected 상태 텍스트가 보이지 않을 수 있으므로
-    #   리스트에서 아예 사라지는 시점을 기준으로 시각 기록
-    prev_names  = set(prev_statuses.keys())
-    curr_names  = set(curr_statuses.keys())
-    appeared    = curr_names - prev_names   # 리스트에 새로 나타난 Device
-    disappeared = prev_names - curr_names   # 리스트에서 사라진 Device
+    # ※ parse_statuses()는 (Connected|Disconnected) 형식만 파싱하므로
+    #   상태 텍스트가 없는 Device는 감지 불가 → 원시 items 전체를 기준으로 탐지
+
+    def extract_name(item_text):
+        """'deviceName(Connected)' → 'deviceName',  'deviceName' → 'deviceName'"""
+        m = re.match(r'^(.+?)\s*\(', item_text.strip())
+        return m.group(1).strip() if m else item_text.strip()
+
+    prev_all    = {extract_name(i) for i in state['items'] if i.strip()}
+    curr_all    = {extract_name(i) for i in items          if i.strip()}
+    appeared    = curr_all - prev_all   # 리스트에 새로 나타난 Device
+    disappeared = prev_all - curr_all   # 리스트에서 사라진 Device
 
     # 새로 나타난 Device → CONN 파일 저장 및 경로 등록
     for dev in appeared:
@@ -695,6 +905,10 @@ def check_device_changes(driver, state):
                 'filepath':     fp,
                 'connected_at': ts_display,
             }
+
+    # 새 Device 출현 시 첫 번째 항목 자동 선택 + 라디오 버튼 + 지도 줌 재설정
+    if appeared:
+        setup_device_view(driver, DRONE_ALTITUDE_M)
 
     # 리스트에서 사라진 Device → 기존 CONN 파일에 사라진 시각 기록
     for dev in disappeared:
@@ -709,14 +923,15 @@ def check_device_changes(driver, state):
             del state['connected_files'][dev]
         else:
             # CONN 파일 없음(초기 기동 시 이미 있던 Device) → 단독 파일 기록
-            print(f"[{_ts()}] [{dev}] CONN 파일 없음 — 사라진 시각 단독 파일 기록")
-            msg = (f"Device    : {dev}\n"
+            print(f"[{_ts()}] [{dev}] CONN 파일 없음 — 종료시간 단독 파일 기록")
+            msg = (f"Device명  : {dev}\n"
                    f"{'='*50}\n"
-                   f"상태      : 리스트에서 사라짐\n"
-                   f"감지 시각 : {ts_display}\n"
+                   f"접속시간  : (기록 없음 — 프로그램 시작 전 접속)\n"
+                   f"종료시간  : {ts_display}\n"
+                   f"접속지속  : 계산 불가\n"
                    f"{'='*50}\n"
                    f"{status_line}\n")
-            save_alert_to_file(f"⚠ {dev} 리스트 제거", msg, dev, ts_file)
+            save_alert_to_file(f"⚠ {dev} 종료", msg, dev, ts_file)
 
     # ① 전체 수량 변경 감지
     if count != state['count']:
@@ -812,6 +1027,9 @@ def check_device_changes(driver, state):
 
     if not alerts:
         print(f"[{_ts()}] Device 이상 없음 — {status_line}")
+
+    # 항상 최신 items로 state 동기화 (stale state 방지)
+    state['items'] = items
 
 
 # ──────────────────────────────────────────────
