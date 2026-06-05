@@ -465,121 +465,138 @@ def altitude_to_zoom(altitude_m):
     return 13
 
 
+def _click_by_text(driver, labels, timeout=5):
+    """텍스트 일치 요소를 Selenium으로 탐색 후 클릭.
+    정확 일치 → 부분 일치 순으로 시도.
+    """
+    xpaths_exact   = [f"//*[normalize-space(text())='{t}']"    for t in labels]
+    xpaths_contain = [f"//*[contains(normalize-space(text()),'{t}')]" for t in labels]
+
+    for xpath in xpaths_exact + xpaths_contain:
+        try:
+            el = WebDriverWait(driver, timeout).until(
+                EC.element_to_be_clickable((By.XPATH, xpath))
+            )
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+            time.sleep(0.2)
+            el.click()
+            return el.text.strip()
+        except Exception:
+            continue
+    return None
+
+
 def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
-    """Device List 첫 번째 항목 자동 선택 +
-    '실시간 화면 켜짐' / '드론 추적 켜짐' 라디오 버튼 활성화 +
-    드론 고도에 맞는 지도 자동 확대/축소
+    """① Device List 첫 번째 항목 선택
+    ② 선택 후 '실시간 화면 꺼짐' 라디오 버튼 클릭
+    ③ '드론 추적 꺼짐' 라디오 버튼 클릭
+    ④ 드론 고도에 맞는 지도 자동 확대/축소
     """
     zoom = altitude_to_zoom(altitude_m)
-    time.sleep(1.5)   # 페이지 렌더링 대기
+    time.sleep(2)   # 페이지 렌더링 대기
 
+    # ── ① 첫 번째 Device 항목 선택 ─────────────────────────────────────
+    device_selected = None
     try:
-        result = driver.execute_script("""
-            var zoom    = arguments[0];
-            var res     = {device:null, realtime:null, tracking:null, mapZoom:null};
+        # 페이지 텍스트에서 deviceName(Connected|Disconnected) 패턴 항목 탐색
+        # 가장 첫 번째 매칭 요소 클릭
+        device_xpaths = [
+            # 텍스트 노드가 "name(Status)" 형태인 요소
+            "//*[contains(text(),'(Connected)') or contains(text(),'(Disconnected)')]"
+            "[not(self::script)][not(self::style)]",
+            # 리스트 항목 중 Device List 섹션 첫 번째
+            "//li[contains(text(),'(Connected)') or contains(text(),'(Disconnected)')]",
+            "//*[contains(@class,'item') or contains(@class,'row') or contains(@class,'card')]"
+            "[contains(text(),'(Connected)') or contains(text(),'(Disconnected)')]",
+        ]
+        for xpath in device_xpaths:
+            try:
+                els = driver.find_elements(By.XPATH, xpath)
+                visible = [e for e in els if e.is_displayed()]
+                if visible:
+                    first = visible[0]
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});", first)
+                    time.sleep(0.3)
+                    first.click()
+                    device_selected = first.text.strip()[:60]
+                    print(f"[{_ts()}] ✔ Device 선택: '{device_selected}'")
+                    time.sleep(1)   # 선택 후 UI 반응 대기
+                    break
+            except Exception:
+                continue
 
-            // ─── ① Device List 첫 번째 항목 클릭 ──────────────────────
-            // "Device List (N)" 헤더를 찾아 가장 가까운 부모 컨테이너에서
-            // 첫 번째 리스트 항목 클릭
-            (function(){
-                var walker = document.createTreeWalker(
-                    document.body, NodeFilter.SHOW_TEXT, null, false);
-                var node;
-                while((node = walker.nextNode())){
-                    if(/Device\\s+List\\s*\\(\\d+\\)/i.test(node.textContent.trim())){
-                        var container = node.parentElement;
-                        // 부모를 최대 5단계까지 올라가며 리스트 항목 탐색
-                        for(var d = 0; d < 5; d++){
-                            container = container.parentElement;
-                            if(!container) break;
-                            var items = container.querySelectorAll(
-                                'li, [class*="item"], [class*="device-card"],' +
-                                '[class*="list-row"], [class*="row"]');
-                            if(items.length > 0){
-                                items[0].click();
-                                res.device = items[0].textContent.trim()
-                                              .replace(/\\s+/g,' ').substring(0,60);
-                                return;
-                            }
-                        }
-                    }
-                }
-            })();
+        if not device_selected:
+            print(f"[{_ts()}] [경고] Device 항목을 찾지 못했습니다.")
+    except Exception as e:
+        print(f"[{_ts()}] Device 선택 오류: {e}")
 
-            // ─── ② 라디오/토글 버튼 클릭 헬퍼 ────────────────────────
-            function clickByLabels(labels){
-                var all = document.querySelectorAll(
-                    'label, span, div, button, input[type="radio"], ' +
-                    '[class*="radio"], [class*="toggle"], [class*="btn"]');
-                for(var i = 0; i < all.length; i++){
-                    var txt = all[i].textContent.trim();
-                    for(var j = 0; j < labels.length; j++){
-                        if(txt === labels[j]){
-                            all[i].click();
-                            return txt;
-                        }
-                    }
-                }
-                // 부분 일치 재시도
-                for(var i = 0; i < all.length; i++){
-                    var txt = all[i].textContent.trim();
-                    for(var j = 0; j < labels.length; j++){
-                        if(txt.indexOf(labels[j]) > -1){
-                            all[i].click();
-                            return txt;
-                        }
-                    }
-                }
-                return null;
-            }
+    # ── ② 실시간 화면 꺼짐 라디오 버튼 ─────────────────────────────────
+    realtime_result = None
+    try:
+        realtime_result = _click_by_text(driver,
+            ['실시간 화면 꺼짐', '실시간화면꺼짐', '실시간 화면 OFF'])
+        if realtime_result:
+            print(f"[{_ts()}] ✔ 실시간 화면 버튼 클릭: '{realtime_result}'")
+            time.sleep(0.5)
+        else:
+            print(f"[{_ts()}] [경고] '실시간 화면 꺼짐' 버튼을 찾지 못했습니다.")
+    except Exception as e:
+        print(f"[{_ts()}] 실시간 화면 버튼 오류: {e}")
 
-            res.realtime = clickByLabels(['실시간 화면 꺼짐','실시간화면꺼짐','실시간 화면 OFF']);
-            res.tracking = clickByLabels(['드론 추적 꺼짐','드론추적꺼짐','드론 추적 OFF']);
+    # ── ③ 드론 추적 꺼짐 라디오 버튼 ───────────────────────────────────
+    tracking_result = None
+    try:
+        tracking_result = _click_by_text(driver,
+            ['드론 추적 꺼짐', '드론추적꺼짐', '드론 추적 OFF'])
+        if tracking_result:
+            print(f"[{_ts()}] ✔ 드론 추적 버튼 클릭: '{tracking_result}'")
+            time.sleep(0.5)
+        else:
+            print(f"[{_ts()}] [경고] '드론 추적 꺼짐' 버튼을 찾지 못했습니다.")
+    except Exception as e:
+        print(f"[{_ts()}] 드론 추적 버튼 오류: {e}")
 
-            // ─── ③ OpenLayers 지도 줌 설정 ────────────────────────────
+    # ── ④ OpenLayers 지도 줌 설정 ───────────────────────────────────────
+    try:
+        map_result = driver.execute_script("""
+            var zoom = arguments[0];
             var mapFound = false;
 
-            // 전략 1: window 전역 객체 탐색
-            var gKeys = ['map','olMap','mapInstance','leaflet','viewer'];
-            for(var k = 0; k < gKeys.length && !mapFound; k++){
+            // 전략 1: window 전역 객체
+            ['map','olMap','mapInstance'].forEach(function(k){
                 try{
-                    var g = window[gKeys[k]];
-                    if(g && typeof g.getView === 'function'){
-                        g.getView().setZoom(zoom);
-                        res.mapZoom = 'global:' + gKeys[k] + ':' + zoom;
-                        mapFound = true;
+                    if(!mapFound && window[k] && typeof window[k].getView==='function'){
+                        window[k].getView().setZoom(zoom);
+                        mapFound = 'global:'+k;
                     }
                 }catch(e){}
-            }
+            });
 
             // 전략 2: window 속성 전체 스캔
             if(!mapFound){
                 for(var key in window){
                     try{
-                        var v = window[key];
-                        if(v && typeof v === 'object' && typeof v.getView === 'function'){
+                        var v=window[key];
+                        if(v&&typeof v==='object'&&typeof v.getView==='function'){
                             v.getView().setZoom(zoom);
-                            res.mapZoom = 'scan:' + key + ':' + zoom;
-                            mapFound = true;
-                            break;
+                            mapFound='scan:'+key; break;
                         }
                     }catch(e){}
                 }
             }
 
-            // 전략 3: OL viewport 부모 요소 속성 탐색
+            // 전략 3: OL viewport 부모 속성
             if(!mapFound){
-                var vp = document.querySelector('.ol-viewport');
-                if(vp && vp.parentElement){
-                    for(var prop in vp.parentElement){
+                var vp=document.querySelector('.ol-viewport');
+                if(vp&&vp.parentElement){
+                    for(var p in vp.parentElement){
                         try{
-                            if(prop.indexOf('ol_') === 0){
-                                var obj = vp.parentElement[prop];
-                                if(obj && typeof obj.getView === 'function'){
-                                    obj.getView().setZoom(zoom);
-                                    res.mapZoom = 'ol_prop:' + zoom;
-                                    mapFound = true;
-                                    break;
+                            if(p.indexOf('ol_')===0){
+                                var o=vp.parentElement[p];
+                                if(o&&typeof o.getView==='function'){
+                                    o.getView().setZoom(zoom);
+                                    mapFound='ol_prop'; break;
                                 }
                             }
                         }catch(e){}
@@ -587,46 +604,35 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
                 }
             }
 
-            // 전략 4: Vue 인스턴스를 통한 접근
+            // 전략 4: Vue 인스턴스
             if(!mapFound){
-                var mapEls = document.querySelectorAll('[class*="map"], .ol-viewport');
-                for(var m = 0; m < mapEls.length && !mapFound; m++){
-                    var vm = mapEls[m].__vue__ || mapEls[m].__vueParentComponent;
+                document.querySelectorAll('[class*="map"],.ol-viewport').forEach(function(el){
+                    if(mapFound) return;
+                    var vm=el.__vue__||el.__vueParentComponent;
                     if(vm){
-                        var vmap = (vm.$data && vm.$data.map) ||
-                                   (vm.setupState && vm.setupState.map);
-                        if(vmap && typeof vmap.getView === 'function'){
-                            vmap.getView().setZoom(zoom);
-                            res.mapZoom = 'vue:' + zoom;
-                            mapFound = true;
+                        var m=(vm.$data&&vm.$data.map)||(vm.setupState&&vm.setupState.map);
+                        if(m&&typeof m.getView==='function'){
+                            m.getView().setZoom(zoom); mapFound='vue';
                         }
                     }
-                }
+                });
             }
 
-            // 전략 5 (fallback): OL 줌 버튼 클릭으로 대략 조정
+            // 전략 5 (fallback): 줌 버튼 클릭
             if(!mapFound){
-                // 현재 줌 레벨 추정: 기본 15로 가정
-                var diff = zoom - 15;
-                var btnSel = diff > 0 ? '.ol-zoom-in' : '.ol-zoom-out';
-                var btn = document.querySelector(btnSel);
-                for(var n = 0; n < Math.abs(diff) && btn; n++) btn.click();
-                res.mapZoom = 'btn_fallback:' + zoom;
+                var diff=zoom-15;
+                var sel=diff>0?'.ol-zoom-in':'.ol-zoom-out';
+                var btn=document.querySelector(sel);
+                for(var n=0;n<Math.abs(diff)&&btn;n++) btn.click();
+                mapFound='btn:'+zoom;
             }
 
-            return res;
+            return mapFound;
         """, zoom)
-
-        if result:
-            print(f"[{_ts()}] Device 뷰 자동 설정 완료:")
-            print(f"         · Device 선택  : {result.get('device')  or '해당 없음'}")
-            print(f"         · 실시간 화면  : {result.get('realtime') or '버튼 미발견'}")
-            print(f"         · 드론 추적    : {result.get('tracking') or '버튼 미발견'}")
-            print(f"         · 지도 줌      : {result.get('mapZoom')  or '설정 실패'}"
-                  f"  (고도 {altitude_m}m → zoom {zoom})")
-
+        print(f"[{_ts()}] ✔ 지도 줌 설정: zoom {zoom} "
+              f"(고도 {altitude_m}m, 방식: {map_result})")
     except Exception as e:
-        print(f"[{_ts()}] Device 뷰 설정 오류: {e}")
+        print(f"[{_ts()}] 지도 줌 설정 오류: {e}")
 
 
 # ──────────────────────────────────────────────
