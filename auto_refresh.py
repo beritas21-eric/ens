@@ -503,19 +503,37 @@ def _click_by_text(driver, labels, timeout=5):
             continue
 
     # 방법 3: JavaScript 전체 DOM 탐색 + click
+    # 토글 버튼 우선 탐색 후 전체 요소로 확장
     result = driver.execute_script("""
         var labels = arguments[0];
-        var all = document.querySelectorAll('*');
-        for (var i = 0; i < all.length; i++) {
-            var el = all[i];
-            if (!el.offsetParent && el.tagName !== 'BODY') continue; // 숨김 제외
-            var txt = el.textContent.trim();
-            for (var j = 0; j < labels.length; j++) {
-                if (txt === labels[j] || txt.indexOf(labels[j]) > -1) {
-                    el.click();
-                    return txt;
+
+        function tryClick(selector) {
+            var all = document.querySelectorAll(selector);
+            for (var i = 0; i < all.length; i++) {
+                var el = all[i];
+                var rect = el.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) continue;
+                var txt = el.textContent.trim();
+                for (var j = 0; j < labels.length; j++) {
+                    if (txt === labels[j] || txt.indexOf(labels[j]) > -1) {
+                        el.scrollIntoView({block: 'center'});
+                        el.click();
+                        return txt;
+                    }
                 }
             }
+            return null;
+        }
+
+        // 토글 버튼 우선 시도
+        var toggleSelectors = [
+            '[class*="toggle"]', '[class*="switch"]',
+            '[class*="btn"]', 'button',
+            'label', 'span', 'div'
+        ];
+        for (var s = 0; s < toggleSelectors.length; s++) {
+            var found = tryClick(toggleSelectors[s]);
+            if (found) return found;
         }
         return null;
     """, labels)
@@ -556,8 +574,8 @@ def _diagnose_buttons(driver):
 
 def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     """① Device List 첫 번째 항목 선택
-    ② 선택 후 '실시간 화면 꺼짐' 라디오 버튼 클릭
-    ③ '드론 추적 꺼짐' 라디오 버튼 클릭
+    ② 선택 후 '실시간 화면 꺼짐' 토글 버튼 클릭
+    ③ '드론 추적 꺼짐' 토글 버튼 클릭
     ④ 드론 고도에 맞는 지도 자동 확대/축소
     """
     zoom = altitude_to_zoom(altitude_m)
@@ -589,7 +607,7 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
                     first.click()
                     device_selected = first.text.strip()[:60]
                     print(f"[{_ts()}] ✔ Device 선택: '{device_selected}'")
-                    time.sleep(1)   # 선택 후 UI 반응 대기
+                    time.sleep(3)   # 선택 후 토글 버튼 렌더링 대기
                     break
             except Exception:
                 continue
@@ -599,7 +617,7 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     except Exception as e:
         print(f"[{_ts()}] Device 선택 오류: {e}")
 
-    # ── ② 실시간 화면 꺼짐 라디오 버튼 ─────────────────────────────────
+    # ── ② 실시간 화면 꺼짐 토글 버튼 ───────────────────────────────────
     realtime_result = None
     try:
         realtime_result = _click_by_text(driver,
@@ -613,7 +631,7 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     except Exception as e:
         print(f"[{_ts()}] 실시간 화면 버튼 오류: {e}")
 
-    # ── ③ 드론 추적 꺼짐 라디오 버튼 ───────────────────────────────────
+    # ── ③ 드론 추적 꺼짐 토글 버튼 ─────────────────────────────────────
     tracking_result = None
     try:
         tracking_result = _click_by_text(driver,
