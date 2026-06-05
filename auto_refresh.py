@@ -574,8 +574,8 @@ def _diagnose_buttons(driver):
 
 def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     """① Device List 첫 번째 항목 선택
-    ② 선택 후 '실시간 화면 꺼짐' 토글 버튼 클릭
-    ③ '드론 추적 꺼짐' 토글 버튼 클릭
+    ② 선택 후 '실시간 화면 켜짐' 토글 버튼 클릭
+    ③ '드론 추적 켜짐' 토글 버튼 클릭
     ④ 드론 고도에 맞는 지도 자동 확대/축소
     """
     zoom = altitude_to_zoom(altitude_m)
@@ -617,11 +617,11 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     except Exception as e:
         print(f"[{_ts()}] Device 선택 오류: {e}")
 
-    # ── ② 실시간 화면 꺼짐 토글 버튼 ───────────────────────────────────
+    # ── ② 실시간 화면 켜짐 토글 버튼 ───────────────────────────────────
     realtime_result = None
     try:
         realtime_result = _click_by_text(driver,
-            ['실시간 화면 꺼짐', '실시간화면꺼짐', '실시간 화면 OFF', '실시간화면OFF'])
+            ['실시간 화면 켜짐', '실시간화면켜짐', '실시간 화면 ON', '실시간화면ON'])
         if realtime_result:
             print(f"[{_ts()}] ✔ 실시간 화면 버튼 클릭: '{realtime_result}'")
             time.sleep(0.5)
@@ -631,11 +631,11 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     except Exception as e:
         print(f"[{_ts()}] 실시간 화면 버튼 오류: {e}")
 
-    # ── ③ 드론 추적 꺼짐 토글 버튼 ─────────────────────────────────────
+    # ── ③ 드론 추적 켜짐 토글 버튼 ─────────────────────────────────────
     tracking_result = None
     try:
         tracking_result = _click_by_text(driver,
-            ['드론 추적 꺼짐', '드론추적꺼짐', '드론 추적 OFF', '드론추적OFF'])
+            ['드론 추적 켜짐', '드론추적켜짐', '드론 추적 ON', '드론추적ON'])
         if tracking_result:
             print(f"[{_ts()}] ✔ 드론 추적 버튼 클릭: '{tracking_result}'")
             time.sleep(0.5)
