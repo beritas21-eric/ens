@@ -45,6 +45,7 @@ TARGET_URL         = "https://esdr.skax-sv-ai.com/device-management/monitoring-e
 LOGIN_ID           = "kukil.kang"
 LOGIN_PW           = "#Skcc03477"
 START_HOUR         = 8    # 오전 8시
+START_MINUTE       = 0    # 0분 (정각)
 END_HOUR           = 17   # 오후 5시 자동 종료
 KEEPALIVE_INTERVAL = 30   # 초
 DRONE_ALTITUDE_M   = 100  # 드론 고도 가정값 (m)
