@@ -466,13 +466,17 @@ def altitude_to_zoom(altitude_m):
 
 
 def _click_by_text(driver, labels, timeout=5):
-    """텍스트 일치 요소를 Selenium으로 탐색 후 클릭.
-    정확 일치 → 부분 일치 순으로 시도.
+    """텍스트 일치 요소를 탐색 후 클릭.
+    ① XPath element_to_be_clickable
+    ② find_elements + JS click (클릭 불가 판정 우회)
+    ③ JS innerHTML 전체 탐색
     """
-    xpaths_exact   = [f"//*[normalize-space(text())='{t}']"    for t in labels]
-    xpaths_contain = [f"//*[contains(normalize-space(text()),'{t}')]" for t in labels]
+    xpaths_exact   = [f"//*[normalize-space(text())='{t}']"             for t in labels]
+    xpaths_contain = [f"//*[contains(normalize-space(text()),'{t}')]"   for t in labels]
+    xpaths_dot     = [f"//*[normalize-space(.)='{t}']"                  for t in labels]
 
-    for xpath in xpaths_exact + xpaths_contain:
+    # 방법 1: WebDriverWait + 일반 클릭
+    for xpath in xpaths_exact + xpaths_dot:
         try:
             el = WebDriverWait(driver, timeout).until(
                 EC.element_to_be_clickable((By.XPATH, xpath))
@@ -483,7 +487,71 @@ def _click_by_text(driver, labels, timeout=5):
             return el.text.strip()
         except Exception:
             continue
-    return None
+
+    # 방법 2: find_elements + JS click (클릭 불가 요소 우회)
+    for xpath in xpaths_exact + xpaths_contain + xpaths_dot:
+        try:
+            els = driver.find_elements(By.XPATH, xpath)
+            for el in els:
+                if el.is_displayed():
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});", el)
+                    time.sleep(0.2)
+                    driver.execute_script("arguments[0].click();", el)
+                    return el.text.strip()
+        except Exception:
+            continue
+
+    # 방법 3: JavaScript 전체 DOM 탐색 + click
+    result = driver.execute_script("""
+        var labels = arguments[0];
+        var all = document.querySelectorAll('*');
+        for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if (!el.offsetParent && el.tagName !== 'BODY') continue; // 숨김 제외
+            var txt = el.textContent.trim();
+            for (var j = 0; j < labels.length; j++) {
+                if (txt === labels[j] || txt.indexOf(labels[j]) > -1) {
+                    el.click();
+                    return txt;
+                }
+            }
+        }
+        return null;
+    """, labels)
+    return result
+
+
+def _diagnose_buttons(driver):
+    """버튼/라디오 관련 요소를 모두 출력 (디버깅용)"""
+    try:
+        items = driver.execute_script("""
+            var res = [];
+            var seen = new Set();
+            document.querySelectorAll(
+                'button, input[type="radio"], label, ' +
+                '[class*="radio"], [class*="toggle"], [class*="btn"], ' +
+                '[class*="switch"], [role="radio"], [role="button"]'
+            ).forEach(function(el) {
+                var txt = el.textContent.trim().replace(/\\s+/g,' ');
+                if (txt && !seen.has(txt) && txt.length < 40) {
+                    seen.add(txt);
+                    res.push({
+                        tag: el.tagName,
+                        txt: txt,
+                        cls: (el.className||'').substring(0,60),
+                        vis: el.offsetParent !== null
+                    });
+                }
+            });
+            return res;
+        """)
+        print(f"[{_ts()}] ── 버튼/라디오 요소 목록 ──")
+        for item in (items or []):
+            print(f"         [{item['tag']}] '{item['txt']}'  "
+                  f"class='{item['cls']}'  visible={item['vis']}")
+    except Exception as e:
+        print(f"[{_ts()}] 진단 오류: {e}")
 
 
 def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
@@ -535,12 +603,13 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     realtime_result = None
     try:
         realtime_result = _click_by_text(driver,
-            ['실시간 화면 꺼짐', '실시간화면꺼짐', '실시간 화면 OFF'])
+            ['실시간 화면 꺼짐', '실시간화면꺼짐', '실시간 화면 OFF', '실시간화면OFF'])
         if realtime_result:
             print(f"[{_ts()}] ✔ 실시간 화면 버튼 클릭: '{realtime_result}'")
             time.sleep(0.5)
         else:
             print(f"[{_ts()}] [경고] '실시간 화면 꺼짐' 버튼을 찾지 못했습니다.")
+            _diagnose_buttons(driver)   # 실제 버튼 목록 출력
     except Exception as e:
         print(f"[{_ts()}] 실시간 화면 버튼 오류: {e}")
 
@@ -548,12 +617,13 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     tracking_result = None
     try:
         tracking_result = _click_by_text(driver,
-            ['드론 추적 꺼짐', '드론추적꺼짐', '드론 추적 OFF'])
+            ['드론 추적 꺼짐', '드론추적꺼짐', '드론 추적 OFF', '드론추적OFF'])
         if tracking_result:
             print(f"[{_ts()}] ✔ 드론 추적 버튼 클릭: '{tracking_result}'")
             time.sleep(0.5)
         else:
             print(f"[{_ts()}] [경고] '드론 추적 꺼짐' 버튼을 찾지 못했습니다.")
+            _diagnose_buttons(driver)   # 실제 버튼 목록 출력
     except Exception as e:
         print(f"[{_ts()}] 드론 추적 버튼 오류: {e}")
 
