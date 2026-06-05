@@ -533,8 +533,8 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
                 return null;
             }
 
-            res.realtime = clickByLabels(['실시간 화면 켜짐','실시간화면켜짐','실시간 화면 ON']);
-            res.tracking = clickByLabels(['드론 추적 켜짐','드론추적켜짐','드론 추적 ON']);
+            res.realtime = clickByLabels(['실시간 화면 꺼짐','실시간화면꺼짐','실시간 화면 OFF']);
+            res.tracking = clickByLabels(['드론 추적 꺼짐','드론추적꺼짐','드론 추적 OFF']);
 
             // ─── ③ OpenLayers 지도 줌 설정 ────────────────────────────
             var mapFound = false;
