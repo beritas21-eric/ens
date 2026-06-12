@@ -635,9 +635,9 @@ def _expand_collapsed_panels(driver):
 
 def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     """① 접힌 패널 펼치기
-    ② Device List 첫 번째 항목 선택
-    ③ 선택 후 '실시간 화면 켜짐' 토글 버튼 클릭
-    ④ '드론 추적 켜짐' 토글 버튼 클릭
+    ② '실시간 화면 꺼짐' → 켜짐 토글 클릭  (Device 선택과 무관하게 먼저 실행)
+    ③ '드론 추적 꺼짐'   → 켜짐 토글 클릭
+    ④ Device List 첫 번째 항목 선택 (없으면 조용히 스킵)
     ⑤ 드론 고도에 맞는 지도 자동 확대/축소
     """
     zoom = altitude_to_zoom(altitude_m)
@@ -645,75 +645,13 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
 
     # ── ① 접힌 패널 펼치기 ──────────────────────────────────────────────
     _expand_collapsed_panels(driver)
-    _diagnose_buttons(driver)   # 현재 버튼 목록 확인
 
-    # ── ① 첫 번째 Device 항목 선택 ─────────────────────────────────────
-    device_selected = None
-    try:
-        # 페이지 텍스트에서 deviceName(Connected|Disconnected) 패턴 항목 탐색
-        # 가장 첫 번째 매칭 요소 클릭
-        device_xpaths = [
-            # 텍스트 노드가 "name(Status)" 형태인 요소
-            "//*[contains(text(),'(Connected)') or contains(text(),'(Disconnected)')]"
-            "[not(self::script)][not(self::style)]",
-            # 리스트 항목 중 Device List 섹션 첫 번째
-            "//li[contains(text(),'(Connected)') or contains(text(),'(Disconnected)')]",
-            "//*[contains(@class,'item') or contains(@class,'row') or contains(@class,'card')]"
-            "[contains(text(),'(Connected)') or contains(text(),'(Disconnected)')]",
-        ]
-        for xpath in device_xpaths:
-            try:
-                els = driver.find_elements(By.XPATH, xpath)
-                visible = [e for e in els if e.is_displayed()]
-                if visible:
-                    first = visible[0]
-                    driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});", first)
-                    time.sleep(0.3)
-                    first.click()
-                    device_selected = first.text.strip()[:60]
-                    print(f"[{_ts()}] ✔ Device 선택: '{device_selected}'")
-                    time.sleep(3)   # 선택 후 토글 버튼 렌더링 대기
-                    break
-            except Exception:
-                continue
-
-        if not device_selected:
-            # 추가 대기 후 패널 재확장 시도
-            print(f"[{_ts()}] [경고] Device 항목을 찾지 못했습니다. 5초 후 재시도...")
-            time.sleep(5)
-            _expand_collapsed_panels(driver)
-            time.sleep(2)
-            for xpath in device_xpaths:
-                try:
-                    els = driver.find_elements(By.XPATH, xpath)
-                    visible = [e for e in els if e.is_displayed()]
-                    if visible:
-                        first = visible[0]
-                        driver.execute_script(
-                            "arguments[0].scrollIntoView({block:'center'});", first)
-                        time.sleep(0.3)
-                        first.click()
-                        device_selected = first.text.strip()[:60]
-                        print(f"[{_ts()}] ✔ Device 선택 (재시도): '{device_selected}'")
-                        time.sleep(3)
-                        break
-                except Exception:
-                    continue
-            if not device_selected:
-                print(f"[{_ts()}] [경고] Device 항목 재시도도 실패.")
-                _diagnose_buttons(driver)
-    except Exception as e:
-        print(f"[{_ts()}] Device 선택 오류: {e}")
-
-    # ── ② 실시간 화면 켜짐 토글 버튼 ───────────────────────────────────
-    # '켜짐' = 켜져 있는 상태 버튼 클릭 (이미 켜짐이면 무시해도 됨)
-    # '꺼짐' = 꺼져 있는 상태 버튼 클릭해서 켜기
+    # ── ② 실시간 화면 토글 (꺼짐 → 켜짐) ──────────────────────────────
     realtime_result = None
     try:
         realtime_result = _click_by_text(driver, [
-            '실시간 화면 켜짐', '실시간화면켜짐',
             '실시간 화면 꺼짐', '실시간화면꺼짐',
+            '실시간 화면 켜짐', '실시간화면켜짐',
             '실시간 화면 ON',  '실시간화면ON',
             '실시간 화면',     '실시간화면',
         ])
@@ -726,12 +664,12 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     except Exception as e:
         print(f"[{_ts()}] 실시간 화면 버튼 오류: {e}")
 
-    # ── ③ 드론 추적 켜짐 토글 버튼 ─────────────────────────────────────
+    # ── ③ 드론 추적 토글 (꺼짐 → 켜짐) ────────────────────────────────
     tracking_result = None
     try:
         tracking_result = _click_by_text(driver, [
-            '드론 추적 켜짐', '드론추적켜짐',
             '드론 추적 꺼짐', '드론추적꺼짐',
+            '드론 추적 켜짐', '드론추적켜짐',
             '드론 추적 ON',   '드론추적ON',
             '드론 추적',      '드론추적',
         ])
@@ -744,7 +682,39 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
     except Exception as e:
         print(f"[{_ts()}] 드론 추적 버튼 오류: {e}")
 
-    # ── ④ OpenLayers 지도 줌 설정 ───────────────────────────────────────
+    # ── ④ 첫 번째 Device 항목 선택 (없으면 스킵) ───────────────────────
+    device_selected = None
+    device_xpaths = [
+        "//*[contains(text(),'(Connected)') or contains(text(),'(Disconnected)')]"
+        "[not(self::script)][not(self::style)]",
+        "//li[contains(text(),'(Connected)') or contains(text(),'(Disconnected)')]",
+        "//*[contains(@class,'item') or contains(@class,'row') or contains(@class,'card')]"
+        "[contains(text(),'(Connected)') or contains(text(),'(Disconnected)')]",
+    ]
+    try:
+        for xpath in device_xpaths:
+            try:
+                els = driver.find_elements(By.XPATH, xpath)
+                visible = [e for e in els if e.is_displayed()]
+                if visible:
+                    first = visible[0]
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});", first)
+                    time.sleep(0.3)
+                    first.click()
+                    device_selected = first.text.strip()[:60]
+                    print(f"[{_ts()}] ✔ Device 선택: '{device_selected}'")
+                    time.sleep(1)
+                    break
+            except Exception:
+                continue
+
+        if not device_selected:
+            print(f"[{_ts()}] Device List 비어 있음 — Device 연결 시 자동 재설정됩니다.")
+    except Exception as e:
+        print(f"[{_ts()}] Device 선택 오류: {e}")
+
+    # ── ⑤ OpenLayers 지도 줌 설정 ───────────────────────────────────────
     try:
         map_result = driver.execute_script("""
             var zoom = arguments[0];
