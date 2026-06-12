@@ -541,45 +541,109 @@ def _click_by_text(driver, labels, timeout=5):
 
 
 def _diagnose_buttons(driver):
-    """버튼/라디오 관련 요소를 모두 출력 (디버깅용)"""
+    """버튼/라디오/텍스트 요소를 모두 출력 (디버깅용). iframe도 탐색."""
+    def _scan_context(ctx, label="main"):
+        try:
+            items = ctx.execute_script("""
+                var res = [];
+                var seen = new Set();
+                document.querySelectorAll(
+                    'button, input[type="radio"], label, span, div, ' +
+                    '[class*="radio"], [class*="toggle"], [class*="btn"], ' +
+                    '[class*="switch"], [role="radio"], [role="button"], ' +
+                    '[class*="item"], [class*="list"]'
+                ).forEach(function(el) {
+                    var txt = el.textContent.trim().replace(/\\s+/g,' ');
+                    if (txt && !seen.has(txt) && txt.length > 1 && txt.length < 50) {
+                        var rect = el.getBoundingClientRect();
+                        if (rect.width > 0 || el.tagName === 'BUTTON') {
+                            seen.add(txt);
+                            res.push({
+                                tag: el.tagName,
+                                txt: txt,
+                                cls: (el.className||'').substring(0,60),
+                                vis: el.offsetParent !== null
+                            });
+                        }
+                    }
+                });
+                return res;
+            """)
+            print(f"[{_ts()}] ── 버튼/요소 목록 [{label}] ({len(items or [])}개) ──")
+            for item in (items or [])[:40]:
+                print(f"         [{item['tag']}] '{item['txt']}'  "
+                      f"class='{item['cls']}'  visible={item['vis']}")
+        except Exception as e:
+            print(f"[{_ts()}] 진단 오류 [{label}]: {e}")
+
+    _scan_context(driver, "main")
+
+    # iframe 내부도 탐색
     try:
-        items = driver.execute_script("""
-            var res = [];
-            var seen = new Set();
-            document.querySelectorAll(
-                'button, input[type="radio"], label, ' +
-                '[class*="radio"], [class*="toggle"], [class*="btn"], ' +
-                '[class*="switch"], [role="radio"], [role="button"]'
-            ).forEach(function(el) {
-                var txt = el.textContent.trim().replace(/\\s+/g,' ');
-                if (txt && !seen.has(txt) && txt.length < 40) {
-                    seen.add(txt);
-                    res.push({
-                        tag: el.tagName,
-                        txt: txt,
-                        cls: (el.className||'').substring(0,60),
-                        vis: el.offsetParent !== null
-                    });
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+        for i, frame in enumerate(frames[:3]):
+            try:
+                driver.switch_to.frame(frame)
+                _scan_context(driver, f"iframe[{i}]")
+                driver.switch_to.default_content()
+            except Exception:
+                driver.switch_to.default_content()
+
+
+def _expand_collapsed_panels(driver):
+    """접힌 패널/사이드바를 클릭해 펼침.
+    - `›` / `<` / `»` 텍스트를 가진 숨김 버튼 포함 JS 클릭
+    - 클래스명에 'collapse', 'toggle', 'expand' 포함 요소도 시도
+    """
+    result = driver.execute_script("""
+        var expandTexts = ['›', '‹', '»', '«', '<', '>', '펼치기', '열기'];
+        var expandSelectors = [
+            '[class*="collapse"]', '[class*="toggle-btn"]',
+            '[class*="expand"]',   '[class*="sidebar"]',
+            '[class*="drawer"]',   '[class*="panel-toggle"]',
+        ];
+
+        var clicked = [];
+
+        // ① 텍스트 일치 버튼/span (숨김 포함)
+        document.querySelectorAll('button, span, div, a').forEach(function(el) {
+            var txt = (el.textContent || '').trim();
+            if (expandTexts.indexOf(txt) > -1) {
+                try { el.click(); clicked.push('text:' + txt); } catch(e) {}
+            }
+        });
+
+        // ② 클래스 기반 확장 버튼
+        expandSelectors.forEach(function(sel) {
+            document.querySelectorAll(sel).forEach(function(el) {
+                var rect = el.getBoundingClientRect();
+                // 아주 작은 요소(토글 핸들)만 클릭
+                if (rect.width < 60 && rect.height > 0) {
+                    try { el.click(); clicked.push('cls:' + sel); } catch(e) {}
                 }
             });
-            return res;
-        """)
-        print(f"[{_ts()}] ── 버튼/라디오 요소 목록 ──")
-        for item in (items or []):
-            print(f"         [{item['tag']}] '{item['txt']}'  "
-                  f"class='{item['cls']}'  visible={item['vis']}")
-    except Exception as e:
-        print(f"[{_ts()}] 진단 오류: {e}")
+        });
+
+        return clicked;
+    """)
+    if result:
+        print(f"[{_ts()}] 패널 확장 시도: {result}")
+        time.sleep(1.5)
 
 
 def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
-    """① Device List 첫 번째 항목 선택
-    ② 선택 후 '실시간 화면 켜짐' 토글 버튼 클릭
-    ③ '드론 추적 켜짐' 토글 버튼 클릭
-    ④ 드론 고도에 맞는 지도 자동 확대/축소
+    """① 접힌 패널 펼치기
+    ② Device List 첫 번째 항목 선택
+    ③ 선택 후 '실시간 화면 켜짐' 토글 버튼 클릭
+    ④ '드론 추적 켜짐' 토글 버튼 클릭
+    ⑤ 드론 고도에 맞는 지도 자동 확대/축소
     """
     zoom = altitude_to_zoom(altitude_m)
-    time.sleep(2)   # 페이지 렌더링 대기
+    time.sleep(3)   # 페이지 렌더링 대기
+
+    # ── ① 접힌 패널 펼치기 ──────────────────────────────────────────────
+    _expand_collapsed_panels(driver)
+    _diagnose_buttons(driver)   # 현재 버튼 목록 확인
 
     # ── ① 첫 번째 Device 항목 선택 ─────────────────────────────────────
     device_selected = None
@@ -613,35 +677,68 @@ def setup_device_view(driver, altitude_m=DRONE_ALTITUDE_M):
                 continue
 
         if not device_selected:
-            print(f"[{_ts()}] [경고] Device 항목을 찾지 못했습니다.")
+            # 추가 대기 후 패널 재확장 시도
+            print(f"[{_ts()}] [경고] Device 항목을 찾지 못했습니다. 5초 후 재시도...")
+            time.sleep(5)
+            _expand_collapsed_panels(driver)
+            time.sleep(2)
+            for xpath in device_xpaths:
+                try:
+                    els = driver.find_elements(By.XPATH, xpath)
+                    visible = [e for e in els if e.is_displayed()]
+                    if visible:
+                        first = visible[0]
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center'});", first)
+                        time.sleep(0.3)
+                        first.click()
+                        device_selected = first.text.strip()[:60]
+                        print(f"[{_ts()}] ✔ Device 선택 (재시도): '{device_selected}'")
+                        time.sleep(3)
+                        break
+                except Exception:
+                    continue
+            if not device_selected:
+                print(f"[{_ts()}] [경고] Device 항목 재시도도 실패.")
+                _diagnose_buttons(driver)
     except Exception as e:
         print(f"[{_ts()}] Device 선택 오류: {e}")
 
     # ── ② 실시간 화면 켜짐 토글 버튼 ───────────────────────────────────
+    # '켜짐' = 켜져 있는 상태 버튼 클릭 (이미 켜짐이면 무시해도 됨)
+    # '꺼짐' = 꺼져 있는 상태 버튼 클릭해서 켜기
     realtime_result = None
     try:
-        realtime_result = _click_by_text(driver,
-            ['실시간 화면 켜짐', '실시간화면켜짐', '실시간 화면 ON', '실시간화면ON'])
+        realtime_result = _click_by_text(driver, [
+            '실시간 화면 켜짐', '실시간화면켜짐',
+            '실시간 화면 꺼짐', '실시간화면꺼짐',
+            '실시간 화면 ON',  '실시간화면ON',
+            '실시간 화면',     '실시간화면',
+        ])
         if realtime_result:
             print(f"[{_ts()}] ✔ 실시간 화면 버튼 클릭: '{realtime_result}'")
             time.sleep(0.5)
         else:
-            print(f"[{_ts()}] [경고] '실시간 화면 꺼짐' 버튼을 찾지 못했습니다.")
-            _diagnose_buttons(driver)   # 실제 버튼 목록 출력
+            print(f"[{_ts()}] [경고] 실시간 화면 버튼을 찾지 못했습니다.")
+            _diagnose_buttons(driver)
     except Exception as e:
         print(f"[{_ts()}] 실시간 화면 버튼 오류: {e}")
 
     # ── ③ 드론 추적 켜짐 토글 버튼 ─────────────────────────────────────
     tracking_result = None
     try:
-        tracking_result = _click_by_text(driver,
-            ['드론 추적 켜짐', '드론추적켜짐', '드론 추적 ON', '드론추적ON'])
+        tracking_result = _click_by_text(driver, [
+            '드론 추적 켜짐', '드론추적켜짐',
+            '드론 추적 꺼짐', '드론추적꺼짐',
+            '드론 추적 ON',   '드론추적ON',
+            '드론 추적',      '드론추적',
+        ])
         if tracking_result:
             print(f"[{_ts()}] ✔ 드론 추적 버튼 클릭: '{tracking_result}'")
             time.sleep(0.5)
         else:
-            print(f"[{_ts()}] [경고] '드론 추적 꺼짐' 버튼을 찾지 못했습니다.")
-            _diagnose_buttons(driver)   # 실제 버튼 목록 출력
+            print(f"[{_ts()}] [경고] 드론 추적 버튼을 찾지 못했습니다.")
+            _diagnose_buttons(driver)
     except Exception as e:
         print(f"[{_ts()}] 드론 추적 버튼 오류: {e}")
 
