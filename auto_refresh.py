@@ -588,6 +588,8 @@ def _diagnose_buttons(driver):
                 driver.switch_to.default_content()
             except Exception:
                 driver.switch_to.default_content()
+    except Exception as e:
+        print(f"[{_ts()}] iframe 탐색 오류: {e}")
 
 
 def _expand_collapsed_panels(driver):
